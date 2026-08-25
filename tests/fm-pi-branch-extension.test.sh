@@ -99,6 +99,10 @@ export class SessionManager {
   getSessionFile() {
     return this.file;
   }
+  buildSessionContext() {
+    const model = globalThis.__fmRecordedModels?.get(this.file) ?? null;
+    return { messages: model ? [{ role: "assistant", content: [], provider: model.provider, model: model.modelId }] : [], thinkingLevel: "medium", model };
+  }
 }
 
 export function createBashToolDefinition(cwd, options) {
@@ -144,6 +148,10 @@ export async function createAgentSession(options) {
       session.disposed = true;
     },
   };
+  const restoredModel = options.model
+    ? { provider: options.model.provider, modelId: options.model.id }
+    : globalThis.__fmRecordedModels?.get(options.sessionManager.getSessionFile());
+  if (restoredModel) (globalThis.__fmRecordedModels ??= new Map()).set(options.sessionManager.getSessionFile(), restoredModel);
   (globalThis.__fmSessions ??= []).push(session);
   return { session, extensionsResult: {} };
 }
@@ -1648,6 +1656,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 registryModels.push(
   { provider: "anthropic", id: "main-model", reasoning: true },
   { provider: "openai", id: "deep-1", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
+  { provider: "openai", id: "shallow-1", reasoning: true },
 );
 const command = commands.get("supervision-model");
 const effortPin = `${home}/config/supervision-branch-effort`;
@@ -1748,6 +1757,40 @@ dispatch("signal: clamped build");
 await settle(() => (globalThis.__fmSessions ?? []).length === 2, "clamped branch build");
 if (globalThis.__fmSessions[1].options.thinkingLevel !== "high") {
   throw new Error(`the clamped build did not run at the reported level: ${globalThis.__fmSessions[1].options.thinkingLevel}`);
+}
+
+// When main's model cannot be resolved, the effort step derives Pi's level
+// set from the model recorded by the persistent branch conversation.
+uiSelections.push("openai/shallow-1", "max");
+await command.handler("", makeCtx());
+dispatch("signal: record shallow branch model");
+await settle(() => (globalThis.__fmSessions ?? []).length === 3, "shallow branch build");
+registryModels.find((model) => model.id === "main-model").branchAvailable = false;
+const restoredNoticeCount = notices.length;
+uiSelections.push("Follow main (anthropic/main-model)");
+await command.handler("", makeCtx());
+const restoredPicker = uiPrompts[uiPrompts.length - 1];
+if (JSON.stringify(restoredPicker.options.slice(1)) !== JSON.stringify(["off", "minimal", "low", "medium", "high"])) {
+  throw new Error(`the unresolved-main picker did not use Pi's levels for the recorded branch model: ${JSON.stringify(restoredPicker.options)}`);
+}
+const restoredNotices = notices.slice(restoredNoticeCount);
+if (restoredNotices.length !== 1 || !restoredNotices[0].message.includes("Effort: max, which this model runs at high.")) {
+  throw new Error(`the recorded branch model did not make clamp reporting honest: ${JSON.stringify(restoredNotices)}`);
+}
+
+// If neither main nor the recorded branch model can be resolved, no invented
+// catalog is offered and the report says the applied level is unknown.
+registryModels.find((model) => model.id === "shallow-1").branchAvailable = false;
+const unknownNoticeCount = notices.length;
+uiSelections.push("Follow main (anthropic/main-model)");
+await command.handler("", makeCtx());
+const unknownPicker = uiPrompts[uiPrompts.length - 1];
+if (JSON.stringify(unknownPicker.options) !== JSON.stringify(["Follow main (medium)"])) {
+  throw new Error(`the unknown-model picker invented effort levels: ${JSON.stringify(unknownPicker.options)}`);
+}
+const unknownNotices = notices.slice(unknownNoticeCount);
+if (unknownNotices.length !== 1 || !unknownNotices[0].message.includes("cannot be determined")) {
+  throw new Error(`the unknown effective effort was reported as applied: ${JSON.stringify(unknownNotices)}`);
 }
 process.exit(0);
 EOF

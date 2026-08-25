@@ -429,6 +429,20 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function effectiveBranchModel(selected: BranchModel | undefined): Promise<BranchModel | undefined> {
+    if (selected) return selected;
+    try {
+      const recorded = readFileSync(sessionPointer, "utf8").trim();
+      if (!recorded || !existsSync(recorded)) return undefined;
+      const context = SessionManager.open(recorded, sessionsDir).buildSessionContext();
+      if (context.messages.length === 0 || !context.model) return undefined;
+      const resolved = await resolveBranchModel(context.model.provider, context.model.modelId);
+      return resolved.ok ? resolved.selection.model : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   // The effort pin file's CURRENT state decides the branch's reasoning effort
   // on every branch build, create and reopen alike, on exactly the model-pin
   // contract above and for exactly the same reason: a reopened branch session
@@ -1093,18 +1107,17 @@ ${context.command}
   // choice standing; the model pick already made is still applied.
   async function pickBranchEffort(
     ctx: { ui: { select: (title: string, options: string[]) => Promise<string | undefined> } },
-    branchModel: BranchModel | undefined,
+    selectedModel: BranchModel | undefined,
   ): Promise<{ message: string; warning: boolean }> {
+    const branchModel = await effectiveBranchModel(selectedModel);
     const currentPin = readEffortPin();
     const current = currentPin ?? "follows main";
     const main = mainEffort();
     const followMainEffort = `Follow main${main ? ` (${main})` : ""}`;
-    // With no resolvable branch model there is no model-specific menu to
-    // show, so offer Pi's whole vocabulary and let Pi clamp at build time.
-    const levels = branchModel ? getSupportedThinkingLevels(branchModel) : [...BRANCH_EFFORT_LEVELS];
+    const levels = branchModel ? getSupportedThinkingLevels(branchModel) : [];
     const picked = await ctx.ui.select(`Supervision branch effort (now: ${current})`, [followMainEffort, ...levels]);
     if (picked === undefined) {
-      return { message: describeBranchEffort(currentPin, branchModel), warning: false };
+      return { message: describeBranchEffort(currentPin, branchModel), warning: branchModel === undefined };
     }
     try {
       if (picked === followMainEffort) {
@@ -1120,18 +1133,24 @@ ${context.command}
         warning: true,
       };
     }
-    return { message: describeBranchEffort(readEffortPin(), branchModel), warning: false };
+    return {
+      message: describeBranchEffort(readEffortPin(), branchModel),
+      warning: branchModel === undefined,
+    };
   }
 
   // Reports the effort the branch will actually run at, never the raw choice:
   // Pi clamps a level the branch's model does not support, and an unpinned
   // branch follows main's own effort only when Pi can tell us what that is.
   function describeBranchEffort(pin: BranchEffort | null, branchModel: BranchModel | undefined): string {
+    if (!branchModel) {
+      return "The effort level the branch will run at cannot be determined because its effective model could not be resolved.";
+    }
     const chosen = pin ?? mainEffort();
     if (chosen === undefined) {
       return "Effort follows main, whose own effort is not known yet, so the branch keeps the effort its own session recorded until that conversation is replaced.";
     }
-    const applied = branchModel ? (clampThinkingLevel(branchModel, chosen) as BranchEffort) : chosen;
+    const applied = clampThinkingLevel(branchModel, chosen) as BranchEffort;
     if (pin === null) return `Effort follows main (${applied}).`;
     return applied === pin ? `Effort: ${pin}.` : `Effort: ${pin}, which this model runs at ${applied}.`;
   }
