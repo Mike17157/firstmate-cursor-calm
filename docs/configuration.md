@@ -65,8 +65,8 @@ A pin naming a model Pi cannot hand back, because the model is unknown or has no
 Picking also releases the live branch so the next wake reopens the same persistent branch conversation under the new model without waiting for a session replacement.
 
 The effort file holds one Pi thinking level followed by one newline, and the two pins are independent: a captain may pin a model, an effort, both, or neither.
-The effort step runs after the model step because the model decides which levels exist: its menu is Pi's own supported-level list for the model just chosen, so a model that maps no extended levels simply does not offer them and a non-reasoning model offers only `off`.
-Firstmate keeps no effort catalog of its own; when main's model cannot be resolved, the picker first resolves the model recorded by the persistent branch conversation and uses Pi's supported levels for that effective model.
+The effort step runs after the model step because the effective branch model decides which levels exist: its menu is Pi's own supported-level list, so a model that maps no extended levels simply does not offer them and a non-reasoning model offers only `off`.
+The picker keeps no effort catalog of its own; when main's model cannot be resolved, it first resolves the model recorded by the persistent branch conversation and uses Pi's supported levels for that effective model.
 If neither model can be resolved, the picker invents no levels and the command says that the branch's effective effort cannot be determined.
 An absent, unreadable, or unrecognized file means no effort pin, and the branch then follows main's own current effort, applied explicitly and live whenever main changes effort mid-session.
 A valid pin wins over main and remains unaffected by main's effort changes.

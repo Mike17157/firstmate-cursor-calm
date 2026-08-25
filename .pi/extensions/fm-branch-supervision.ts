@@ -1102,8 +1102,8 @@ ${context.command}
 
   // Step two of /supervision-model, shown after the model pick and driven by
   // Pi's own supported-level list for the model the branch will now use, so
-  // the menu is the one Pi's own thinking selector would show and Firstmate
-  // keeps no effort catalog of its own. Cancelling leaves the current effort
+  // the menu is the one Pi's own thinking selector would show and keeps no
+  // parallel Firstmate picker catalog. Cancelling leaves the current effort
   // choice standing; the model pick already made is still applied.
   async function pickBranchEffort(
     ctx: { ui: { select: (title: string, options: string[]) => Promise<string | undefined> } },
