@@ -69,17 +69,8 @@ CLAUDE_STOP_PAYLOAD='{"session_id":"sess-claude","stop_hook_active":false}'
 install_scripts() {
   local dir=$1 f
   mkdir -p "$dir/bin" "$dir/docs"
-  for f in fm-turnend-guard-cursor.sh fm-turnend-guard.sh fm-sessionstart-cursor.sh \
-           fm-sessionstart-run.sh fm-sessionstart-nudge.sh fm-arm-pretool-check.sh \
-           fm-cd-pretool-check.sh fm-claude-stop-autoarm.sh fm-hook-host-lib.sh \
-           fm-primary-scope-lib.sh fm-supervision-lib.sh fm-wake-lib.sh \
-           fm-session-lock-lib.sh fm-cursor-lib.sh fm-operational-input.sh \
-           fm-supervision-instructions.sh fm-harness.sh fm-lock.sh \
-           fm-gate-refuse-lib.sh; do
-    cp "$ROOT/bin/$f" "$dir/bin/$f"
-  done
-  cp "$ROOT/bin/fm-arm-command-policy.mjs" "$dir/bin/fm-arm-command-policy.mjs"
-  cp "$ROOT/bin/fm-cd-command-policy.mjs" "$dir/bin/fm-cd-command-policy.mjs"
+  cp "$ROOT"/bin/*.sh "$dir/bin/"
+  cp "$ROOT"/bin/*.mjs "$dir/bin/" 2>/dev/null || true
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir"/bin/*.sh
 }
@@ -127,6 +118,15 @@ if [ -e "$FM_HOME/state/arm-fast" ]; then
 fi
 sleep 30
 printf 'stale: fixture-win late\n'
+exit 0
+SH
+      ;;
+    rearm-only)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >> "$FM_HOME/state/arm-ran"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'check: rearm-resurface\n'
 exit 0
 SH
       ;;
@@ -287,6 +287,38 @@ test_park_delivers_actionable_wake_as_followup() {
   case "$body" in *'stale: fixture-win needs a look'*) ;; *) fail "the wake reason was not carried into the follow-up: $body" ;; esac
   case "$body" in *'fm-wake-drain.sh'*) ;; *) fail "the follow-up must tell the session to drain first: $body" ;; esac
   pass "cursor park: an actionable close is delivered as one watcher-kind follow-up"
+}
+
+test_park_silent_on_empty_rearm_resurface() {
+  local dir out marker
+  dir=$(make_primary_dir "$TMP_ROOT/park-rearm-quiet")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" rearm-only
+  printf 'announced:downtime:fixture-gen\n' > "$dir/state/.watcher-down"
+  chmod 600 "$dir/state/.watcher-down"
+  : > "$dir/state/.wake-queue"
+  out=$(run_park "$dir")
+  [ -z "$out" ] || fail "an empty recovery re-surface must not wake the captain: $out"
+  marker=$(cat "$dir/state/.watcher-down" 2>/dev/null || true)
+  case "$marker" in acked:*) ;; *) fail "recovery should retire quietly, got marker: $marker" ;; esac
+  pass "cursor park: empty rearm-resurface completes recovery without a follow-up"
+}
+
+test_park_delivers_durable_wakes_after_rearm_resurface() {
+  local dir out body
+  dir=$(make_primary_dir "$TMP_ROOT/park-rearm-queue")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" rearm-only
+  printf 'pending:downtime:fixture-gen\n' > "$dir/state/.watcher-down"
+  chmod 600 "$dir/state/.watcher-down"
+  printf '%s\t1\tcheck\tstartup-network\tcheck: startup-network\n' "$(date +%s)" > "$dir/state/.wake-queue"
+  out=$(run_park "$dir")
+  [ "$(kind_of_followup "$out")" = watcher ] \
+    || fail "durable wakes after downtime must still surface, got: $out"
+  body=$(followup_of "$out")
+  case "$body" in *'check: startup-network'*) ;; *) fail "the queued wake was not carried into the follow-up: $body" ;; esac
+  case "$body" in *'check: rearm-resurface'*) fail "the follow-up must carry the durable wake, not the recovery stub: $body" ;; esac
+  pass "cursor park: rearm-resurface with queued work still delivers the real wake"
 }
 
 test_park_never_exits_two() {
@@ -644,6 +676,8 @@ test_pretool_guards_deduplicate_and_render_cursor_deny
 test_cd_guard_renders_cursor_deny
 test_park_silent_when_nothing_in_flight
 test_park_delivers_actionable_wake_as_followup
+test_park_silent_on_empty_rearm_resurface
+test_park_delivers_durable_wakes_after_rearm_resurface
 test_park_never_exits_two
 test_park_repair_nag_is_bounded
 test_park_repair_nag_requires_a_persisted_budget

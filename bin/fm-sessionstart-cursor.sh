@@ -33,8 +33,30 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+CALM_FILE="$CONFIG/cursor-calm"
+
 DIGEST=$("$SCRIPT_DIR/fm-sessionstart-run.sh" --source "$SOURCE" </dev/null 2>/dev/null || true)
 [ -n "$DIGEST" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
+
+# Fork experiment: Cursor Calm injects captain-facing quiet-mode contract only.
+# It cannot hide Cursor tool-call UI rows; docs/cursor-calm.md owns the boundary.
+CALM_VAL=$(head -n 1 "$CALM_FILE" 2>/dev/null || true)
+if [ "$CALM_VAL" = on ]; then
+  DIGEST="$DIGEST
+
+================================================================================
+CURSOR CALM (on) - captain chat contract for this session
+================================================================================
+Speak to the captain in outcomes and plans only.
+Do not narrate tool names, internal paths, monitoring mechanics, or step-by-step tool work in captain-facing chat.
+Keep replies short; lead with the decision or result the captain needs.
+Cursor Calm cannot hide Cursor's tool-call UI - for denser folding use Cursor Settings Conversation / Tool Call Density → Compact.
+docs/cursor-calm.md owns this preference.
+"
+fi
+
 jq -n --arg c "$DIGEST" '{additional_context:$c}' 2>/dev/null || true
 exit 0

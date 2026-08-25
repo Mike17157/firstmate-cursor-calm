@@ -699,6 +699,74 @@ _fm_recovery_marker_arm_check() {
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
+# fm_watch_output_has_actionable_wake <output-file>
+# Exit 0 when the captured watcher output includes a wake that should surface a
+# handling turn. Recovery-only check: rearm-resurface is excluded.
+fm_watch_output_has_actionable_wake() {
+  local out=$1
+  grep -Eq '^(signal:|stale:|heartbeat($|:))' "$out" 2>/dev/null && return 0
+  grep -E '^check:' "$out" 2>/dev/null | grep -qvF 'check: rearm-resurface' && return 0
+  return 1
+}
+
+# fm_watch_output_is_rearm_resurface_only <output-file>
+# Exit 0 when the only wake-shaped lines are check: rearm-resurface.
+fm_watch_output_is_rearm_resurface_only() {
+  local out=$1
+  grep -Eq '^(signal:|stale:|check:|heartbeat($|:))' "$out" 2>/dev/null || return 1
+  fm_watch_output_has_actionable_wake "$out" && return 1
+  grep -Fq 'check: rearm-resurface' "$out" 2>/dev/null
+}
+
+# fm_drain_output_needs_handling <drain-stdout-file>
+# Exit 0 when a wake drain printed captain- or model-actionable content.
+fm_drain_output_needs_handling() {
+  local out=$1
+  [ -s "$out" ] || return 1
+  grep -E '^(OPEN DECISIONS|UNREAD STATUS|RECORD DIVERGENCE|signal:|stale:|check:|heartbeat)' "$out" >/dev/null \
+    && return 0
+  awk -F "$(printf '\t')" 'NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/' "$out" | grep -q .
+}
+
+# fm_rearm_resurface_try_silent_complete <state> <fm-home> <script-dir>
+# For recovery-only rearm-resurface, run the wake drain and auto-ack when nothing
+# actionable remains. Return 0 when recovery retired quietly, 1 when drain
+# surfaced work (sets FM_REARM_HANDLING_BODY to drain stdout), 2 on hard failure.
+fm_rearm_resurface_try_silent_complete() {
+  local state=$1 fm_home=$2 script_dir=$3
+  local drain_out drain_err ack_through ack_gen
+  FM_REARM_HANDLING_BODY=
+  drain_out=$(mktemp "$state/.rearm-drain-out.XXXXXX") || return 2
+  drain_err=$(mktemp "$state/.rearm-drain-err.XXXXXX") || {
+    rm -f "$drain_out"
+    return 2
+  }
+  if ! FM_HOME="$fm_home" FM_STATE_OVERRIDE="$state" "$script_dir/fm-wake-drain.sh" \
+    >"$drain_out" 2>"$drain_err"; then
+    rm -f "$drain_out" "$drain_err"
+    return 2
+  fi
+  if fm_drain_output_needs_handling "$drain_out"; then
+    FM_REARM_HANDLING_BODY=$(cat "$drain_out" 2>/dev/null || true)
+    rm -f "$drain_out" "$drain_err"
+    return 1
+  fi
+  if grep -q '^WAKE_ACK_REQUIRED:' "$drain_err" 2>/dev/null; then
+    ack_through=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([^ ]*\).*/\1/p' "$drain_err" | tail -1)
+    ack_gen=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--recovery-generation \([^ ]*\).*/\1/p' "$drain_err" | tail -1)
+    case "$ack_through" in ''|*[!0-9]*) rm -f "$drain_out" "$drain_err"; return 2 ;; esac
+    case "$ack_gen" in ''|*[!A-Za-z0-9._-]*) rm -f "$drain_out" "$drain_err"; return 2 ;; esac
+    if ! FM_HOME="$fm_home" FM_STATE_OVERRIDE="$state" "$script_dir/fm-wake-drain.sh" \
+      --ack-through "$ack_through" --recovery-generation "$ack_gen" \
+      >/dev/null 2>&1; then
+      rm -f "$drain_out" "$drain_err"
+      return 2
+    fi
+  fi
+  rm -f "$drain_out" "$drain_err"
+  return 0
+}
+
 # A non-successor watcher start after an announced-but-unacked episode is a new
 # down stretch: mint a fresh pending generation so a still-open decision or
 # buried note can be presented once more. Handling successors must not call

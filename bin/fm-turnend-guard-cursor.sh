@@ -283,6 +283,8 @@ ARM_PID=
 ACTIONABLE=0
 HEALTHY=0
 STAND_DOWN=0
+REARM_HANDLING_BODY=
+SILENT_REARM_COMPLETED=0
 
 # Never leave an arm child or its capture file behind, on any exit path.
 trap '[ -n "$ARM_PID" ] && kill "$ARM_PID" 2>/dev/null; [ -n "$ARM_OUT" ] && rm -f "$ARM_OUT" 2>/dev/null; :' EXIT
@@ -319,8 +321,29 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
   [ -e "$STATE/.afk" ] && exit 0
 
   ACTIONABLE=0
+  REARM_HANDLING_BODY=
   if [ -n "$ARM_OUT" ]; then
-    grep -Eq '^(signal:|stale:|check:|heartbeat($|:))' "$ARM_OUT" 2>/dev/null && ACTIONABLE=1
+    if fm_watch_output_is_rearm_resurface_only "$ARM_OUT"; then
+      fm_rearm_resurface_try_silent_complete "$STATE" "$FM_HOME" "$SCRIPT_DIR"
+      rearm_rc=$?
+      case "$rearm_rc" in
+        0)
+          ACTIONABLE=0
+          SILENT_REARM_COMPLETED=1
+          [ -n "$ARM_OUT" ] && rm -f "$ARM_OUT" 2>/dev/null
+          ARM_OUT=
+          if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+            HEALTHY=1
+            break
+          fi
+          continue
+          ;;
+        1) ACTIONABLE=1; REARM_HANDLING_BODY=${FM_REARM_HANDLING_BODY:-} ;;
+        *) ACTIONABLE=0 ;;
+      esac
+    elif fm_watch_output_has_actionable_wake "$ARM_OUT"; then
+      ACTIONABLE=1
+    fi
   fi
   [ "$ACTIONABLE" -eq 1 ] && break
 
@@ -342,8 +365,20 @@ if ! fm_supervision_needed "$STATE" "$GRACE"; then
   exit 0
 fi
 
+# Recovery-only rearm-resurface with nothing captain-actionable was drained and
+# acked inside the park; end quietly so the next turn end can park again.
+if [ "$SILENT_REARM_COMPLETED" -eq 1 ] && [ "$ACTIONABLE" -eq 0 ] && [ "$HEALTHY" -eq 0 ]; then
+  budget_reset_if_ours
+  exit 0
+fi
+
 if [ "$ACTIONABLE" -eq 1 ]; then
-  WAKE=$(grep -E '^(signal:|stale:|check:|heartbeat)' "$ARM_OUT" 2>/dev/null | head -8)
+  if [ -n "$REARM_HANDLING_BODY" ]; then
+    WAKE=$REARM_HANDLING_BODY
+  else
+    WAKE=$(grep -E '^(signal:|stale:|check:|heartbeat)' "$ARM_OUT" 2>/dev/null \
+      | grep -vF 'check: rearm-resurface' | head -8)
+  fi
   emit_followup watcher "firstmate watcher wake - one supervision event needs a handling turn now.
 $WAKE
 

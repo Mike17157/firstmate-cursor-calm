@@ -63,6 +63,14 @@
       "target": "docs/calm.md"
     },
     {
+      "source": "docs/cursor-calm.md",
+      "target": "docs/calm.md"
+    },
+    {
+      "source": "docs/cursor-calm.md",
+      "target": "docs/configuration.md"
+    },
+    {
       "source": "docs/sessionstart-nudge.md",
       "target": "docs/verification/supervision.md"
     },
@@ -234,6 +242,10 @@
     },
     {
       "path": "docs/calm.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/cursor-calm.md",
       "audience": "operator-current"
     },
     {

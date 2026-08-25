@@ -34,6 +34,16 @@ The `/calm` command replaces the file atomically before changing live presentati
 The extension reloads this preference on every Pi `session_start`, including startup, new, resume, fork, and reload reasons.
 This preference is local to each Firstmate home and is not part of secondmate inherited configuration.
 
+## Cursor Calm preference (config/cursor-calm)
+
+Cursor Calm is a fork experiment for Quiet / Calm behavior on a Cursor primary.
+[`docs/cursor-calm.md`](cursor-calm.md) owns the capability boundary (what it can and cannot hide in Cursor's UI).
+The preference file is home-local gitignored `config/cursor-calm`, resolved from `FM_HOME` then `FM_CONFIG_OVERRIDE` for tests.
+Values are `on` and `off`, each followed by one newline; absent or unrecognized means off.
+`bin/fm-cursor-calm.sh` replaces the file atomically.
+When on, `bin/fm-sessionstart-cursor.sh` appends a captain-chat quiet contract to session-start `additional_context`.
+This preference is not inherited by secondmate homes and never replaces Pi Calm (`config/calm`).
+
 ## Pi supervision branch
 
 On a Pi primary, ordinary actionable fleet wakes that pass the unchanged watcher classifier, plus heartbeat scans that the cheap bash-level scan flags as possibly captain-relevant, are handled by a persistent in-process supervision branch that keeps the captain's conversation clean; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns the architecture.

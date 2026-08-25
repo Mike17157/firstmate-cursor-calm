@@ -212,8 +212,19 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   fi
 
   ACTIONABLE=0
+  REARM_HANDLING_BODY=
   if [ -n "$OUT" ]; then
-    grep -Eq '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" 2>/dev/null && ACTIONABLE=1
+    if fm_watch_output_is_rearm_resurface_only "$OUT"; then
+      fm_rearm_resurface_try_silent_complete "$STATE" "$FM_HOME" "$SCRIPT_DIR"
+      rearm_rc=$?
+      case "$rearm_rc" in
+        0) ACTIONABLE=0 ;;
+        1) ACTIONABLE=1; REARM_HANDLING_BODY=${FM_REARM_HANDLING_BODY:-} ;;
+        *) ACTIONABLE=0 ;;
+      esac
+    elif fm_watch_output_has_actionable_wake "$OUT"; then
+      ACTIONABLE=1
+    fi
   fi
   [ "$ACTIONABLE" -eq 1 ] && break
 
@@ -260,7 +271,12 @@ if [ "$ACTIONABLE" -eq 1 ]; then
   write_epoch rewake
   {
     printf 'firstmate watcher wake - one supervision event needs a handling turn now.\n'
-    [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
+    if [ -n "$REARM_HANDLING_BODY" ]; then
+      printf '%s\n' "$REARM_HANDLING_BODY"
+    elif [ -n "$OUT" ]; then
+      grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null \
+        | grep -vF 'check: rearm-resurface' | head -8
+    fi
     printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'
   } >&2
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
