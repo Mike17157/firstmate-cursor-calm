@@ -205,6 +205,22 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "data/specialists/frontend.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "data/specialists/product-wire-preview.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "data/specialists/product-wire.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "data/specialists/product.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "GROK_BOT.md",
       "audience": "public-product"
     },
