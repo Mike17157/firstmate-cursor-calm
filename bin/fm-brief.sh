@@ -6,8 +6,8 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--stage <name>] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--stage <name>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -22,6 +22,12 @@
 #   omitting both still fails loudly so an accidental omission is never silent.
 #   Set FM_SECONDMATE_CHARTER='<charter>' to fill the charter text.
 #   Set FM_SECONDMATE_SCOPE='<scope>' to write a routing scope distinct from the charter text.
+#   --stage injects a stage-specific design-workflow block into ship and scout briefs.
+#   Allowed values: product, wire, wire-preview, pipeline. Omitted means no stage block.
+#   product      PRD or product-plan acceptance; link data/planning/<scope>/; forbid wire/FE scope.
+#   wire         design-doc plus component-registry checklist; requires an approved PRD named in the brief.
+#   wire-preview preview-spec plus demo-route expectations; browser-smoke note for FE work.
+#   pipeline     firstmate-coding-guidelines plus a no-chrome-devtools tools rule for firstmate-repo work.
 #   --herdr-lab is mandatory when the task will issue Herdr lifecycle commands.
 #   It adds the hard isolation contract backed by bin/fm-herdr-lab.sh.
 #   The flag must be explicit because {TASK} is filled after scaffolding and the
@@ -109,6 +115,8 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+STAGE=
+STAGE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -118,6 +126,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      stage) STAGE=$a; STAGE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -130,6 +139,8 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --stage) want_value=stage ;;
+    --stage=*) STAGE=${a#--stage=}; STAGE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -155,6 +166,16 @@ if [ "$KIND" = ship ]; then
   esac
 elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
+  exit 1
+fi
+if [ "$STAGE_SET" -eq 1 ]; then
+  case "$STAGE" in
+    product|wire|wire-preview|pipeline) ;;
+    *) echo "error: --stage must be one of product, wire, wire-preview, pipeline (got '$STAGE')" >&2; exit 1 ;;
+  esac
+fi
+if [ "$STAGE_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --stage applies only to ship and scout briefs; a secondmate charter is not a design-workflow scaffold" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -194,6 +215,62 @@ When a terminal message says an instruction is waiting there - and at any natura
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
+
+TOOLS_RULE='3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.'
+STAGE_SECTION=
+if [ "$STAGE_SET" -eq 1 ]; then
+  case "$STAGE" in
+    product)
+      IFS= read -r -d '' STAGE_SECTION <<'EOF' || true
+# Stage contract
+**Stage:** product
+
+Deliver a PRD or product plan for captain acceptance.
+Store durable planning artifacts under `data/planning/<scope>/` in the firstmate home (replace `<scope>` with the project or feature slug named in the task).
+Load the `fm-product` skill before starting.
+
+**Out of scope for this stage:** wireframes, visual design, frontend implementation, and browser smoke tests.
+Do not start wire or FE work until the captain approves the product plan.
+EOF
+      ;;
+    wire)
+      IFS= read -r -d '' STAGE_SECTION <<'EOF' || true
+# Stage contract
+**Stage:** wire
+
+Deliver a design doc and complete the component registry checklist for the surfaces named in the task.
+Load the `fm-wire` skill before starting.
+
+**Prerequisite:** an approved PRD or product plan must be named and linked in the `# Task` section above.
+If no approved PRD is named, append `blocked: no approved PRD named in brief` to the status file and stop.
+EOF
+      ;;
+    wire-preview)
+      IFS= read -r -d '' STAGE_SECTION <<'EOF' || true
+# Stage contract
+**Stage:** wire-preview
+
+Deliver a preview spec with demo route expectations for the surfaces named in the task.
+Use chrome-devtools-axi for browser smoke when validating preview routes or frontend behavior.
+
+Wireframes or an approved design doc for this surface should already exist; name them in the task when they are not obvious from context.
+EOF
+      ;;
+    pipeline)
+      TOOLS_RULE='3. Use gh-axi for GitHub operations. Do **not** use chrome-devtools-axi (pipeline task).'
+      IFS= read -r -d '' STAGE_SECTION <<'EOF' || true
+# Stage contract
+**Stage:** pipeline
+
+Load **`firstmate-coding-guidelines`** before editing shared tracked material in the firstmate repo.
+
+This is a pipeline-engineering task: use gh-axi for GitHub operations only.
+Do **not** use chrome-devtools-axi.
+EOF
+      ;;
+  esac
+  STAGE_SECTION=${STAGE_SECTION%$'\n'}
+fi
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -327,6 +404,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 {TASK}
 
 $HERDR_SECTION
+${STAGE_SECTION:+
+$STAGE_SECTION}
 
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
@@ -337,7 +416,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+$TOOLS_RULE
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -440,6 +519,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 {TASK}
 
 $HERDR_SECTION
+${STAGE_SECTION:+
+$STAGE_SECTION}
 
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
@@ -453,7 +534,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+$TOOLS_RULE
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
