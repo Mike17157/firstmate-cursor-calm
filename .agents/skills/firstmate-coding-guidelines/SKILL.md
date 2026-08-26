@@ -29,9 +29,11 @@ Before writing a new fact anywhere in this repo, ask where it belongs, in this o
    If yes: the classified maintainer-architecture owner for stable ownership, extension points, mechanism boundaries, and safety rationale.
 5. Is it active reusable verification for a current guarantee?
    If yes: an explicitly classified maintainer-verification record may keep current dates, versions, exact commands, and exact output.
-6. Is it task or incident evidence - chronology, transcripts, branches, temporary paths, failed hypotheses, or delivery proof?
+6. Is it agent-system planning work (fleet scopes, specialist charters, ADRs, TRDs for the agent fleet)?
+   If yes: `data/planning/<scope>/` per the `planning-documents` skill — not in specialist packs or task reports alone.
+7. Is it task or incident evidence - chronology, transcripts, branches, temporary paths, failed hypotheses, or delivery proof?
    If yes: keep it in the private task report or PR evidence by default, after distilling every unique current fact into its authoritative owner.
-7. Is it mechanics - exact flags, exact commands, exact paths?
+8. Is it mechanics - exact flags, exact commands, exact paths?
    If yes: the script's own header comment plus its `--help` output, not prose in `AGENTS.md`, a skill, or a second documentation owner.
 
 Stop at the first tier that answers yes.
@@ -71,6 +73,7 @@ State the trigger as a condition ("load before X", "load on Y wake"), never as a
 Briefs for tasks that touch firstmate's own tracked material should tell the crewmate to load this skill.
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string with no reliable signal that it names firstmate's own repo, unlike a project registered in `data/projects.md`, so there is no clean point inside the scaffold to detect this case automatically.
 Firstmate adds this skill's load instruction to firstmate-repo briefs by hand instead.
+Every **`pipeline-*`** brief on firstmate shared surfaces must include that load line — the scaffold does not auto-detect prefix or repo identity.
 `CONTRIBUTING.md`'s "Development" section carries the same instruction as a durable reminder.
 
 ## Compatibility and enforcement
@@ -111,6 +114,15 @@ Move or delete evidence only after the current owner and regression pointer are 
 After all documentation, review-fix, and lint-fix commits, review the complete branch diff again against those criteria rather than reviewing only the latest commit.
 Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup routing, local link targets, and owner pointers without keyword-linting legitimate evidence prose.
 
+## Captain fork ships
+
+When the brief scopes firstmate's own repo, ship to the captain fork — not upstream.
+
+- Remote: **`cursor-calm-fork`** → `Mike17157/firstmate-cursor-calm` (see `data/projects.md` and `FORK.md`).
+- Mode: **`direct-PR` + `yolo`** unless the captain explicitly overrides for one task.
+- Skip routine **no-mistakes** / second-model review — quality is tests you run, CI on the PR, and lint when `bin/` changes.
+- Upstream `kunchenguid/firstmate` is reference-only unless the captain names it in that task.
+
 ## Repo style rules
 
 - Put one full sentence per line in tracked Markdown.
@@ -121,6 +133,7 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, pinned shellcheck version, and pinned actionlint workflow lint) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other version of either linter.
 - When a task names a specific tool, implement the work with that tool, or explicitly flag the substitution and its new dependency footprint for review before shipping.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
+- Focus a single test locally with `bin/fm-test-run.sh tests/<subject>.test.sh` before treating script work as done.
 - Tests must exercise behavior through an executable or public interface and must never assert implementation-source bytes, including through parsers, regexes, snapshots, or indirect wrappers.
 - A maintainer-verification record under `docs/verification/` records active empirical facts, not assumptions or task chronology.
 - Include the date, version, exact commands run, and exact output needed to support the current guarantee.
