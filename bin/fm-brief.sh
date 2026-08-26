@@ -439,6 +439,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 # Task
 {TASK}
 
+For \`build-*\` tasks: invoke \`/fm-builder\` and attach \`data/specialists/builder.md\` under ## Specialist pack.
+
 $HERDR_SECTION
 
 # Setup
