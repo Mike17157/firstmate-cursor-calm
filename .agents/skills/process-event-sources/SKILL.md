@@ -25,7 +25,7 @@ Firstmate registers a source, keeps working, and is woken when that process comp
 ## Arming a source
 
 Use the adapter, not the generic runner, for a real source.
-For a Lavish review artifact firstmate owns in the primary session (workers never arm this; see \`lavish-review-workflow\`):
+For a Lavish review artifact this firstmate session owns (primary-hosted review, or a task whose contract assigned ownership here; see \`lavish-review-workflow\`):
 
 ```sh
 bin/fm-procevent-lavish.sh arm <artifact.html>

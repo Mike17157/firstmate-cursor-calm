@@ -738,14 +738,16 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
-  assert_grep "Do NOT run \`lavish-axi\`" "$brief" \
-    "scout brief must forbid worker lavish-axi"
-  assert_grep "firstmate hosts Lavish in the primary session after teardown" "$brief" \
-    "scout brief must state primary-session Lavish ownership"
+  assert_grep "Artifact and Lavish ownership are per-task" "$brief" \
+    "scout brief must state per-task artifact and Lavish ownership"
+  assert_grep "firstmate can host Lavish in the primary session after teardown" "$brief" \
+    "scout brief must state the primary-hosted Lavish default"
+  assert_grep "explicitly authorizes worker-owned visual artifacts or a worker-hosted Lavish session" "$brief" \
+    "scout brief must allow worker-owned artifacts only with explicit task permission"
   assert_grep "lavish-review-workflow/SKILL.md" "$brief" \
     "scout brief must load lavish-review-workflow before done"
   assert_no_grep "you may host the Lavish review loop yourself" "$brief" \
-    "scout brief must not invite workers to host Lavish"
+    "scout brief must not offer unconditional worker Lavish hosting"
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \

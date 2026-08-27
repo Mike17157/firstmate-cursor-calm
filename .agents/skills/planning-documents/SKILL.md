@@ -34,13 +34,13 @@ data/planning/<scope>/
 | `<scope>.api-spec.md` | **API specification** | API research or `forge-api-*` | Endpoints, schemas, error model |
 | `ADR-<nnn>-<slug>.md` | **Architecture Decision Record** | any | Context, decision, consequences (one file per decision) |
 | `<scope>.punch-list.md` | **Punch list** | ongoing | **Done vs pending** - one table; links to PRD/design-doc/ADRs; update on completion |
-| `<scope>.review.html` | **Legacy / export** | rare | Layout archive firstmate may export - never the worker visual deliverable |
-| `assets/` | Optional images | rare export | PNG/SVG referenced by an export HTML |
+| `<scope>.review.html` | **Review HTML** | rare / task-contract | Optional layout archive or named visual artifact - ownership per `lavish-review-workflow` |
+| `assets/` | Optional images | with visual artifacts | PNG/SVG referenced by a named visual artifact |
 
 Use the **full document name** in reports and captain chat ("PRD", "design doc", "TRD", "ADR") - not "the scout report" alone.
 
-Workers deliver **canonical markdown and punch lists only**.
-Visual Lavish presentation is owned by `lavish-review-workflow` in the primary session after worker completion.
+Canonical **markdown and punch lists** remain the planning source of truth under this catalog.
+Extra visual artifacts and Lavish sessions are allowed when the task contract says so; `lavish-review-workflow` owns that ownership resolution.
 Do not create `lavish-board.md` for new work.
 
 ## Singularity rules
@@ -83,7 +83,7 @@ Create or extend the punch list when opening a new scope; ship tasks check it be
 | `research-*` | `<scope>.TRD.md` and/or `<scope>.api-spec.md` |
 | `pipeline-*` (discovery) | `<scope>.PRD.md` or ADRs under `data/planning/<scope>/` |
 
-`lavish-review-workflow` owns visual Lavish presentation and worker forbids; this skill owns document names and paths only.
+`lavish-review-workflow` owns per-task visual and Lavish ownership; this skill owns document names and paths only.
 
 ## Examples
 
