@@ -161,6 +161,14 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/lavish-review-workflow/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/planning-documents/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },

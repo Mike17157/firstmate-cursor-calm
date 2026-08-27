@@ -441,9 +441,11 @@ $INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate.
-Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
-When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
+For planning scopes, also update canonical markdown under \`data/planning/<scope>/\` per \`planning-documents\` (canonical markdown and punch lists remain the planning source of truth).
+Artifact and Lavish ownership are per-task (\`lavish-review-workflow\`): the default is to finish the report, pass the captain-hold gate, and stop so firstmate can host Lavish in the primary session after teardown.
+Only when this brief (or a later steer) explicitly authorizes worker-owned visual artifacts or a worker-hosted Lavish session may you produce those artifacts, run \`lavish-axi\`, publish a session URL, arm \`bin/fm-procevent-lavish.sh\`, or use \`$PAUSED_VERB:\` while awaiting review.
+Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and \`$FM_ROOT/.agents/skills/lavish-review-workflow/SKILL.md\`, and pass the shared completion gate for the report.
+When the report is complete (and any explicitly authorized worker-hosted review has finished), append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 echo "scaffolded: $BRIEF (scout; replace {TASK})"
