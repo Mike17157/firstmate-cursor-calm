@@ -1,66 +1,78 @@
 ---
 name: lavish-review-workflow
 description: >-
-  Agent-only contract for planning and scout review surfaces. Artifact and
-  Lavish ownership are per-task: planning defaults to canonical markdown from
-  workers with Lavish hosted by firstmate in the primary session; a brief may
-  explicitly assign worker-owned artifacts or a worker-hosted Lavish session.
-  Load before briefing planning or visual-review scouts, after scout done before
-  presenting to captain, and when reconciling scout completion gates.
+  Agent-only contract for planning and scout review surfaces. Workers author a
+  self-contained review pack (all CSS/JS inlined); firstmate serves it in the
+  primary session via fm-serve-review.sh / lavish-axi and relays feedback.
+  Load before briefing planning scouts, after scout done before presenting to
+  captain, and when reconciling scout completion gates.
 user-invocable: false
 metadata:
   internal: true
 ---
 
-# Planning review workflow (per-task ownership)
+# Review workflow (worker-authored pack, firstmate-served Lavish)
 
 ## Policy
 
-**Canonical planning markdown is the source of truth for planning content.**
-**Artifact and Lavish session ownership are decided per task**, not by a universal Markdown-only rule.
+**Markdown stays canonical for plan content; the review pack is a worker deliverable; firstmate serves Lavish and never hand-builds review HTML.**
 
-| Layer | Default owner (planning) | When the brief explicitly reassigns |
+| Layer | Owner | Artifact |
 | --- | --- | --- |
-| Source of truth | **Worker** → `data/planning/<scope>/…` markdown + punch lists | Still the worker; extras never replace the canonical doc |
-| Visual review / Lavish | **Firstmate primary session** after teardown | **Worker** may own artifacts and/or host a Lavish session |
-| UI fidelity | **Wire preview ship** → live demo routes in project `web/` | Unchanged |
-| Static HTML export | Optional rare fallback (`lavish-axi export`) | Allowed when the brief names that artifact |
+| Source of truth | **Worker** (scout) | `data/planning/<scope>/<scope>.PRD.md`, `.design-doc.md`, `.TRD.md`, … |
+| Review pack | **Worker** (scout) | Self-contained HTML under `data/planning/<scope>/` (e.g. `<scope>.review.html`) |
+| Lavish serve + poll | **Firstmate primary session** | `bin/fm-serve-review.sh <html-file>` (wraps `lavish-axi`) |
+| UI fidelity | **Wire preview ship** | Live demo routes in project `web/` |
 
-**Captain mediation stays coherent:** captain answers land in chat (and held tasks via `captain-hold-lifecycle`); Lavish annotations never become a second planning authority.
+**Division of labor:** the **worker** authors the full review pack as part of the task deliverable - rich, self-contained HTML with every CSS and JS asset inlined and **zero external resource references**.
+The **firstmate primary session** only serves that file (`bin/fm-serve-review.sh` / `lavish-axi`) so Lavish auto-opens for the captain, may `poll` for annotated feedback, and relays answers into chat and the canonical markdown.
+Firstmate must **never** hand-build or regenerate review HTML from markdown in the primary session.
 
-**Why a default exists:** planning workers should focus on content unless the task contract deliberately assigns layout or live review to them.
+**Why (WSL white-screen, 2026-08-27):** artifacts that fetch DaisyUI / Tailwind / themes from CDNs rendered blank/white in the captain's browser when those network fetches failed.
+Self-contained packs keep the review readable offline and on restricted networks.
 
-## Resolve ownership from the task contract
+## Self-contained inlining method
 
-1. Read the brief (and any later steer that amends it).
-2. If it **explicitly** authorizes worker-owned visual artifacts and/or a worker-hosted Lavish session, follow that contract for those surfaces.
-3. Otherwise use the **planning default** below.
+1. Author against the correct CDN snippet once (DaisyUI 5 + `themes.css` + `@tailwindcss/browser` v4 - never the legacy `cdn.tailwindcss.com` + `full.min.css` pair).
+2. During authoring, **fetch those three CDN assets once** and embed them inline (`<style>` / `<script>`), then remove the external tags.
+3. Verify the file has no remaining external http(s) `src` or `href` resource references (relative links, hash anchors, and `file://` are fine).
+4. Serve only through `bin/fm-serve-review.sh`, which refuses non-self-contained artifacts loudly before `lavish-axi` runs.
+5. Default `data-theme="luxury"` on `<html>` unless the subject project has its own design system to match.
 
-Silence is not permission: do not invent worker hosting because a visual deliverable would help.
+## Worker deliverable (planning and visual-review scouts)
 
-## Planning default (primary-hosted Lavish)
-
-1. Update the canonical markdown doc per `planning-documents`.
-2. Update `<scope>.punch-list.md` when the scope is new or extended.
+1. Update the canonical markdown doc (and punch list when the scope is new or extended).
+2. Author the **self-contained review pack** HTML as a task deliverable when the captain will review visually.
 3. Post `needs-decision:` once in plain text only if genuine captain choices remain.
-4. Pass `captain-hold-lifecycle`, append `done:` with **canonical markdown paths**, stop for teardown.
-5. Do **not** run `lavish-axi`, publish Lavish session URLs, arm `bin/fm-procevent-lavish.sh`, write `review.html` / `lavish-board.md` as the visual deliverable, or use `paused:` awaiting review.
-6. After teardown, **firstmate** may build a Lavish HTML artifact (`npx -y lavish-axi design` for the CDN snippet; DaisyUI 5 + Tailwind browser v4 + `themes.css`; default `data-theme="luxury"` unless the subject project has its own system), run `npx -y lavish-axi <html-file>` in the **primary session**, send the captain the full session URL, and `poll` in that same turn when collecting annotated feedback.
+4. Pass `captain-hold-lifecycle`, append `done:` naming **canonical markdown paths and the review-pack path**, then stop for teardown - unless staying alive to host an iterative Lavish loop (below).
+5. Do **not** leave firstmate to invent the HTML from markdown.
+6. Do **not** use `paused:` while awaiting review after teardown.
 
-## Explicit worker-owned path
+## Firstmate after scout `done` (serve only)
 
-When the brief (or an amending steer) explicitly assigns worker-owned artifacts and/or a worker-hosted Lavish session:
+1. Read the worker's review-pack path (and canonical markdown under `data/planning/<scope>/`).
+2. Run `bin/fm-serve-review.sh <html-file>` in the **primary session** and send the captain the **full session URL** if auto-open needs a backup.
+3. Captain reviews and annotates in Lavish; **answers in chat** when that is the standing preference.
+4. Firstmate may `poll` when waiting for Lavish feedback in the same turn.
+5. Decisions land in the **markdown canonical doc** - Lavish is presentation, not a second source of truth.
+6. Do **not** hand-author or patch the HTML in the primary session; send authorship fixes back to a worker.
 
-1. Still update canonical planning markdown and punch lists when the scope is a planning scout.
-2. Produce only the artifacts the contract names.
-3. You may run `lavish-axi`, publish the session URL, poll/revise, and stay alive for review **only as that contract requires**.
-4. Pass `captain-hold-lifecycle` before treating the investigation or visual review as complete.
-5. Captain answers still close through chat / keyed holds; write durable decisions back into the canonical markdown.
+## Iterative scout-hosted loop
+
+When the captain will iterate on a visual artifact in the same investigation, prefer keeping that scout alive to host its own Lavish loop after the pack is self-contained, so investigation context stays with the author.
+That scout still owns HTML revisions; every re-serve must remain self-contained.
+`process-event-sources` owns arming when firstmate (not the live scout) polls via procevent.
+
+## Forbidden
+
+- Firstmate primary session writing or regenerating review HTML from markdown.
+- Serving a pack that still references external `http(s)` CSS/JS (or any `src`/`href` http(s) resource link) - `fm-serve-review.sh` must refuse.
+- Treating Lavish markup as the source of truth over canonical markdown.
 
 ## Research and non-planning scouts
 
-- Default: markdown report only; firstmate may host Lavish after teardown when visual comparison helps.
-- A brief may explicitly authorize worker-owned artifacts or a worker-hosted Lavish session the same way as above.
+- Default: markdown report only.
+- When a visual comparison helps, the **worker** authors the self-contained pack; **firstmate** serves it after `done` unless the scout hosts an iterative loop.
 
 ## Intake routing
 
@@ -70,6 +82,6 @@ When the brief (or an amending steer) explicitly assigns worker-owned artifacts 
 | App PRD / design doc | `product-*` / `product-wire-*` on **project** |
 | App implementation | `forge-*` after gates |
 
-`bin/fm-brief.sh` scout scaffold states the default and the explicit-permission carve-out.
-`data/captain.md` "Planning review" may record this home's standing preference.
-`captain-hold-lifecycle` remains the sole completion-gate owner; this skill owns ownership resolution and Lavish presentation rules only.
+`bin/fm-brief.sh` scout scaffold points workers at this authorship contract; `bin/fm-serve-review.sh` owns the serve-time refusal.
+`planning-documents` owns canonical planning paths and punch lists.
+`captain-hold-lifecycle` remains the sole completion-gate owner.
