@@ -174,6 +174,10 @@ test_help_includes_entire_header() {
   local help
   help=$("$ROOT/bin/fm-brief.sh" --help)
   assert_contains "$help" "Refuses to overwrite an existing brief." "fm-brief.sh --help omitted its header terminator"
+  assert_contains "$help" "--stage injects a stage-specific design-workflow block" \
+    "fm-brief.sh --help omitted --stage documentation"
+  assert_contains "$help" "product, wire, wire-preview, pipeline" \
+    "fm-brief.sh --help omitted --stage allowed values"
   pass "fm-brief.sh: --help renders the complete header"
 }
 
@@ -288,6 +292,84 @@ mode on a scout brief|brief-refused-b3 some-proj --scout --mode direct-PR|--mode
 mode on a secondmate charter|brief-refused-b4 --secondmate --no-projects --mode no-mistakes|--mode applies only to ship briefs
 ROWS
   pass "fm-brief.sh: --yolo and scout/secondmate --mode are refused, never silently dropped"
+}
+
+test_stage_pipeline_injects_contract_and_tools_rule() {
+  local home id brief out status
+  home="$TMP_ROOT/stage-pipeline-home"
+  mkdir -p "$home/data"
+  id="brief-stage-pipeline-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --stage pipeline >/dev/null 2>&1
+  status=$?
+  expect_code 0 "$status" "ship brief with --stage pipeline should exit 0"
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "pipeline stage brief was not scaffolded"
+  assert_grep "**Stage:** pipeline" "$brief" \
+    "pipeline stage brief missing stage header"
+  # shellcheck disable=SC2016  # backticks must stay literal in the grep pattern
+  assert_grep 'Load **`firstmate-coding-guidelines`** before editing shared tracked material' "$brief" \
+    "pipeline stage brief missing firstmate-coding-guidelines load instruction"
+  assert_grep "Do **not** use chrome-devtools-axi (pipeline task)." "$brief" \
+    "pipeline stage brief missing the no-chrome-devtools tools rule"
+  assert_no_grep "chrome-devtools-axi for browser operations" "$brief" \
+    "pipeline stage brief retained the default browser-tools rule"
+
+  id="brief-stage-pipeline-scout-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout --stage pipeline >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "**Stage:** pipeline" "$brief" \
+    "scout pipeline stage brief missing stage header"
+  assert_grep "Do **not** use chrome-devtools-axi (pipeline task)." "$brief" \
+    "scout pipeline stage brief missing the no-chrome-devtools tools rule"
+  pass "fm-brief.sh: --stage pipeline injects the stage contract and tools rule"
+}
+
+test_stage_product_injects_planning_contract() {
+  local home id brief
+  home="$TMP_ROOT/stage-product-home"
+  mkdir -p "$home/data"
+  id="brief-stage-product-e3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout --stage product >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "**Stage:** product" "$brief" \
+    "product stage brief missing stage header"
+  assert_grep 'data/planning/<scope>/' "$brief" \
+    "product stage brief missing planning path guidance"
+  assert_grep "Do not start wire or FE work until the captain approves the product plan." "$brief" \
+    "product stage brief missing wire/FE scope prohibition"
+  pass "fm-brief.sh: --stage product injects PRD acceptance and scope limits"
+}
+
+test_stage_is_closed_set_and_refused_on_secondmate() {
+  local home out status
+  home="$TMP_ROOT/stage-refused-home"
+  mkdir -p "$home/data"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-stage-bad some-proj --mode no-mistakes --stage nope 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "unknown --stage value should fail"
+  assert_contains "$out" "must be one of product, wire, wire-preview, pipeline" \
+    "unknown --stage refusal did not explain the closed set"
+  out=$(FM_HOME="$home" FM_SECONDMATE_CHARTER=x \
+    "$ROOT/bin/fm-brief.sh" brief-stage-sm --secondmate --no-projects --stage pipeline 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "--stage on secondmate should fail"
+  assert_contains "$out" "--stage applies only to ship and scout briefs" \
+    "secondmate --stage refusal did not explain the contract"
+  pass "fm-brief.sh: --stage is closed-set validated and refused on secondmate charters"
+}
+
+test_stage_absent_leaves_brief_unchanged() {
+  local home id brief
+  home="$TMP_ROOT/stage-absent-home"
+  mkdir -p "$home/data"
+  id="brief-stage-absent-e4"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_no_grep "# Stage contract" "$brief" \
+    "brief without --stage should not inject a stage block"
+  assert_grep "chrome-devtools-axi for browser operations" "$brief" \
+    "brief without --stage should keep the default browser-tools rule"
+  pass "fm-brief.sh: omitting --stage leaves the default brief shape"
 }
 
 test_faster_paths_use_configured_authority_without_stacked_review() {
@@ -719,7 +801,7 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   scout="$home/data/sample-investigation/brief.md"
   assert_grep "$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md" "$scout" \
     "scout brief did not load the captain-call policy before done"
-  assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
+  assert_grep "pass the shared completion gate for the report" "$scout" \
     "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
     "$ROOT/bin/fm-brief.sh" sample-mate --secondmate --no-projects >/dev/null 2>&1
@@ -738,8 +820,16 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_grep "data/planning/<scope>/" "$brief" \
+    "scout brief must keep planning-documents canonical paths"
+  assert_grep "author a self-contained review pack yourself" "$brief" \
+    "scout brief must require worker-authored self-contained review packs"
+  assert_grep "bin/fm-serve-review.sh" "$brief" \
+    "scout brief must name firstmate's serve path for the review pack"
+  assert_grep "lavish-review-workflow/SKILL.md" "$brief" \
+    "scout brief must point at the Lavish review authorship contract"
   assert_grep "you may host the Lavish review loop yourself" "$brief" \
-    "scout brief must mention the option to host a Lavish review loop"
+    "scout brief must still mention the option to host an iterative Lavish loop"
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
@@ -758,6 +848,10 @@ test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
+test_stage_pipeline_injects_contract_and_tools_rule
+test_stage_product_injects_planning_contract
+test_stage_is_closed_set_and_refused_on_secondmate
+test_stage_absent_leaves_brief_unchanged
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
