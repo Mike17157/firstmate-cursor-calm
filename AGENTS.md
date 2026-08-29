@@ -384,8 +384,8 @@ Retire one only on an explicit captain or main-firstmate decision, after loading
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; read and relay its findings, record the report as the Done artifact, and re-evaluate the queue.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
-When a scout deliverable needs captain visual review, load `lavish-review-workflow`: workers author a self-contained review pack; firstmate serves it in the primary session and never hand-builds review HTML.
-When the captain will iterate on the artifact in the same investigation, prefer keeping that scout alive to host its own Lavish loop after the pack is self-contained, so the scout keeps its investigation context and the captain iterates in one continuous session.
+When a scout deliverable needs captain visual review, load `lavish-review-workflow`: workers author a static self-contained review pack (CSS compiled at authoring time; runtime Tailwind and browser CDN scripts banned); the primary session never hand-builds review HTML.
+Prefer keeping that scout alive to host its own Lavish loop before reporting done, so the scout keeps its investigation context and the captain iterates in one continuous session; firstmate may serve an already-authored pack via `bin/fm-serve-review.sh` when not in a worker-hosted loop, but never invents the HTML.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
 
@@ -404,6 +404,8 @@ Session start is the only exception because its one-shot digest already presente
 Treat any `OPEN DECISIONS` section from the drain as actionable reconciliation input even when no wake record was queued.
 Treat any `UNREAD STATUS` section as newly surfaced status that must be read this turn; those lines are not re-printed after this presentation.
 Treat any `RECORD DIVERGENCE` section as a contradiction between two records of one captain call, never as proof the captain ruled; load `captain-hold-lifecycle` and reconcile it in whichever direction the evidence supports.
+Relay every unrelayed `needs-decision:` to the captain through the primary's interactive ask UI in the same wake cycle that discovers it, and return the captain's recorded answer keyed (`bin/fm-captain-hold.sh answer` / `fm-send --resolve-key`) so the worker's record closes at answer time.
+An unrelayed `needs-decision:` older than one wake cycle is a primary-side failure; heartbeat review, wake drain, and the teardown completion gate treat it as such.
 After handling all emitted wakes and reconciling the OPEN DECISIONS and UNREAD STATUS sections, run the exact generation-bound `--ack-through` command printed as `WAKE_ACK_REQUIRED`; interruption before that acknowledgement deliberately leaves the work durable for idempotent re-handling.
 A status line is a wake event, not current state; use `bin/fm-crew-state.sh` when current state matters, especially before re-escalating an old decision, blocker, or pause.
 A declared `paused:` event means a bounded external wait expected to clear on its own, while `blocked:` means firstmate action is needed.
@@ -486,7 +488,8 @@ Reach the captain immediately for:
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
 When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
-Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface the worker hosts.
+Workers never collect captain decisions via Lavish annotations or in-session forms; the primary's interactive ask UI is the canonical decision channel.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
@@ -515,6 +518,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
 Use its scaffold as the contract, then replace every `{TASK}` placeholder with a clear task description, acceptance criteria, constraints, and necessary context before dispatch or seeding.
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
+Generated scout and ship briefs already carry the worker-hosted Lavish review (static pre-compiled CSS, no runtime CDN), decision-channel, and immediate `needs-decision:` contracts, and the primary never hand-builds that HTML; do not restate them when filling `{TASK}`.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.

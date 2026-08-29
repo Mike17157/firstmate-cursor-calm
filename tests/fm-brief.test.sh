@@ -828,8 +828,25 @@ test_scout_and_secondmate_scaffold() {
     "scout brief must name firstmate's serve path for the review pack"
   assert_grep "lavish-review-workflow/SKILL.md" "$brief" \
     "scout brief must point at the Lavish review authorship contract"
-  assert_grep "you may host the Lavish review loop yourself" "$brief" \
-    "scout brief must still mention the option to host an iterative Lavish loop"
+  assert_grep "# Captain review and decisions" "$brief" \
+    "scout brief must carry the captain-review and decisions contract"
+  assert_grep "host a Lavish review presenting it BEFORE you may report done" "$brief" \
+    "scout brief must require worker-hosted Lavish for judgment deliverables"
+  assert_grep "compile CSS at authoring time with the tailwindcss CLI" "$brief" \
+    "scout brief must ban runtime Tailwind/CDN and require pre-compiled CSS"
+  assert_grep "never as a Lavish annotation or in-session question form" "$brief" \
+    "scout brief must forbid collecting decisions via Lavish"
+  assert_grep "the moment the question exists, not at deliverable end" "$brief" \
+    "scout brief must require immediate needs-decision escalation"
+
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-ship-review alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-ship-review/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_grep "# Captain review and decisions" "$brief" \
+    "ship brief must carry the same captain-review and decisions contract"
+  assert_grep "the moment the question exists, not at deliverable end" "$brief" \
+    "ship brief must require immediate needs-decision escalation"
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \

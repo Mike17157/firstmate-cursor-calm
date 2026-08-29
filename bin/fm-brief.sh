@@ -63,6 +63,12 @@
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
 # self-governance section when a touched project AGENTS.md lacks it.
+# Scout and ship scaffolds also carry the captain-review contract: worker-hosted
+# Lavish for judgment deliverables (static pre-compiled CSS, no runtime CDN),
+# decisions only via keyed needs-decision status lines (never Lavish forms),
+# and immediate escalation the moment a captain-worthy question exists.
+# Primary-side same-cycle relay and "never hand-build review HTML" live in
+# AGENTS.md sections 7-9 and 11; this scaffold owns the worker-facing text.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -396,6 +402,17 @@ EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
 
+# Shared by scout and ship: worker-side captain-review and decision-channel contract.
+# AGENTS.md sections 7-9 and 11 own the primary-side duties; do not restate them here.
+IFS= read -r -d '' REVIEW_DECISIONS_SECTION <<'EOF' || true
+# Captain review and decisions
+When your deliverable is something the captain will judge (a plan, research report, content pack, design doc, or similar), host a Lavish review presenting it BEFORE you may report done.
+Author a static self-contained HTML artifact: compile CSS at authoring time with the tailwindcss CLI and embed it as plain `<style>`; never include runtime Tailwind, browser CDN scripts, or other external stylesheet or script fetches (they render unstyled on the captain's machine and break on file://).
+Run `lavish-axi <file>`, then foreground `lavish-axi poll`, stay alive through iterate, and close out only when firstmate relays the captain's recorded approval.
+Boards are viewing and iteration only; every captain question surfaces as a keyed `needs-decision:` status line (rule 6), never as a Lavish annotation or in-session question form.
+EOF
+REVIEW_DECISIONS_SECTION=${REVIEW_DECISIONS_SECTION%$'\n'}
+
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -429,7 +446,9 @@ $TOOLS_RULE
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append a keyed \`needs-decision: {summary of options}\` the moment the question exists, not at deliverable end, and stop.
+   Never collect that answer through Lavish annotations or in-session question forms; boards are viewing and iteration only.
+   Firstmate will reply with the decision through its interactive ask UI.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
@@ -438,15 +457,16 @@ $TOOLS_RULE
 
 $INBOX_SECTION
 
+$REVIEW_DECISIONS_SECTION
+
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 For planning scopes, also update canonical markdown under \`data/planning/<scope>/\` per \`planning-documents\` (canonical markdown and punch lists remain the planning source of truth).
-If your deliverable includes a captain visual review, author a self-contained review pack yourself (rich HTML with all CSS/JS inlined, zero external resource references) as part of the report deliverable - do not leave firstmate to hand-build the HTML from markdown.
-Firstmate serves that pack in the primary session (\`bin/fm-serve-review.sh\` / \`lavish-axi\`) and relays feedback; load \`$FM_ROOT/.agents/skills/lavish-review-workflow/SKILL.md\` for the authorship and inlining contract.
-When the captain will iterate on the artifact in the same investigation, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) after the pack is self-contained.
+If your deliverable includes a captain visual review, author a self-contained review pack yourself as part of the report deliverable - do not leave firstmate to hand-build the HTML from markdown - and follow \`# Captain review and decisions\` (static pre-compiled CSS; worker-hosted Lavish before done).
+Load \`$FM_ROOT/.agents/skills/lavish-review-workflow/SKILL.md\` for the authorship contract; firstmate may serve an authored pack via \`bin/fm-serve-review.sh\` when you are not hosting the loop, and never invents the HTML.
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and \`$FM_ROOT/.agents/skills/lavish-review-workflow/SKILL.md\`, and pass the shared completion gate for the report and any visual review.
-When the report is complete (and any worker-hosted iterative review has finished), append \`done: {one-line conclusion}\` to the status file and stop.
+When the report is complete and any required captain-review loop has the captain's recorded approval, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 echo "scaffolded: $BRIEF (scout; replace {TASK})"
@@ -555,7 +575,9 @@ $TOOLS_RULE
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append a keyed \`needs-decision: {summary of options}\` the moment the question exists, not at deliverable end, and stop.
+   Never collect that answer through Lavish annotations or in-session question forms; boards are viewing and iteration only.
+   Firstmate will reply with the decision through its interactive ask UI.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
@@ -570,6 +592,8 @@ Record only project knowledge useful to almost every future session.
 For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
 If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
 Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+
+$REVIEW_DECISIONS_SECTION
 
 $DOD
 EOF
