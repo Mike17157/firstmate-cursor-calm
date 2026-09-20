@@ -4,7 +4,8 @@
 The command fingerprints each node from graph-owned fields, sends those
 fingerprints to an explicitly configured OpenAI-compatible embeddings endpoint,
 then writes a copy of the graph with semantic cluster ids and bounded
-``semantically_similar_to`` edges.  The input file is never modified.
+``semantically_similar_to`` edges plus a deterministic region plan.  The input
+file is never modified.
 
 Credentials are read from the environment named by ``--api-key-env`` and are
 never accepted as an argv value or included in diagnostics.  The default input
@@ -32,6 +33,7 @@ DEFAULT_ENDPOINT_ENV = "GRAPHIFY_EMBEDDINGS_ENDPOINT"
 DEFAULT_MODEL_ENV = "GRAPHIFY_EMBEDDINGS_MODEL"
 EMBEDDING_BATCH_SIZE = 64
 NEIGHBOR_LIMIT = 12
+REPRESENTATIVE_LIMIT = 3
 SEMANTIC_EDGE_TYPE = "semantically_similar_to"
 
 
@@ -95,6 +97,15 @@ def parse_args(argv):
         required=True,
         metavar="PATH",
         help="Output JSON path; the input graph is never changed.",
+    )
+    parser.add_argument(
+        "--region-plan-output",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Deterministic Luna/Jev region-plan JSON path; by default, write "
+            "beside --output with a .regions suffix."
+        ),
     )
     parser.add_argument(
         "--endpoint",
@@ -453,6 +464,108 @@ def semantic_relationships(records, vectors, threshold, top_k):
             cluster_ids[member] = cluster_id
     return cluster_ids, edges
 
+def region_node_snapshot(record):
+    neighbors = sorted(
+        record.neighbors,
+        key=lambda item: (
+            item["direction"],
+            item["relation"],
+            item["label"],
+        ),
+    )[:NEIGHBOR_LIMIT]
+    return {
+        "node_id": record.node_id,
+        "label": record.label,
+        "source_path": record.source_path,
+        "relation_types": sorted(record.relations),
+        "neighbors": neighbors,
+    }
+
+
+def build_region_plan(records, graph_edges, cluster_ids):
+    by_id = {record.node_id: record for record in records}
+    members_by_cluster = {}
+    for record in records:
+        members_by_cluster.setdefault(cluster_ids[record.node_id], []).append(record.node_id)
+    relation_counts = {cluster_id: {} for cluster_id in members_by_cluster}
+    cross_links = {}
+
+    for _edge, source, target, relation in graph_edges:
+        source_cluster = cluster_ids[source]
+        target_cluster = cluster_ids[target]
+        source_counts = relation_counts[source_cluster]
+        source_counts[relation] = source_counts.get(relation, 0) + 1
+        if target_cluster != source_cluster:
+            target_counts = relation_counts[target_cluster]
+            target_counts[relation] = target_counts.get(relation, 0) + 1
+            key = (source_cluster, target_cluster, relation)
+            link = cross_links.setdefault(
+                key,
+                {
+                    "source_cluster_id": source_cluster,
+                    "target_cluster_id": target_cluster,
+                    "relation": relation,
+                    "edge_count": 0,
+                    "examples": [],
+                },
+            )
+            link["edge_count"] += 1
+            link["examples"].append(
+                {"source_node_id": source, "target_node_id": target}
+            )
+
+    clusters = []
+    for cluster_id in sorted(members_by_cluster):
+        member_ids = sorted(members_by_cluster[cluster_id])
+        representatives = sorted(
+            member_ids,
+            key=lambda node_id: (-len(by_id[node_id].neighbors), node_id),
+        )[:REPRESENTATIVE_LIMIT]
+        source_paths = sorted(
+            {
+                by_id[node_id].source_path
+                for node_id in member_ids
+                if by_id[node_id].source_path
+            }
+        )
+        relation_summary = [
+            {"relation": relation, "edge_count": count}
+            for relation, count in sorted(relation_counts[cluster_id].items())
+        ]
+        clusters.append(
+            {
+                "cluster_id": cluster_id,
+                "node_count": len(member_ids),
+                "node_ids": member_ids,
+                "source_paths": source_paths,
+                "relation_summary": relation_summary,
+                "representative_nodes": [
+                    region_node_snapshot(by_id[node_id]) for node_id in representatives
+                ],
+            }
+        )
+
+    links = []
+    for key in sorted(cross_links):
+        link = cross_links[key]
+        link["examples"].sort(
+            key=lambda item: (item["source_node_id"], item["target_node_id"])
+        )
+        link["examples"] = link["examples"][:REPRESENTATIVE_LIMIT]
+        links.append(link)
+    return {
+        "schema": "graphify-region-plan/v1",
+        "clusters": clusters,
+        "cross_region_links": links,
+    }
+
+
+def default_region_plan_path(output_path):
+    destination = pathlib.Path(output_path)
+    if destination.suffix:
+        return str(destination.with_name(destination.stem + ".regions" + destination.suffix))
+    return str(destination) + ".regions.json"
+
 
 def enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key):
     output = copy.deepcopy(graph)
@@ -472,7 +585,7 @@ def enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key):
     return output
 
 
-def write_json(path, value):
+def write_json(path, value, description):
     destination = pathlib.Path(path)
     parent = destination.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -491,7 +604,7 @@ def write_json(path, value):
                 os.unlink(temporary_name)
             except OSError:
                 pass
-        raise CliError("could not write output graph: {}".format(exc))
+        raise CliError("could not write {}: {}".format(description, exc))
 
 
 def run(args):
@@ -510,6 +623,18 @@ def run(args):
     api_key = os.environ.get(args.api_key_env, "")
 
     input_path = pathlib.Path(args.input)
+    output_path = pathlib.Path(args.output)
+    region_plan_path = pathlib.Path(
+        args.region_plan_output or default_region_plan_path(args.output)
+    )
+    resolved_input = input_path.resolve()
+    if output_path.resolve() == resolved_input:
+        raise CliError("output path must differ from the input graph")
+    if region_plan_path.resolve() == resolved_input:
+        raise CliError("region-plan output path must differ from the input graph")
+    if region_plan_path.resolve() == output_path.resolve():
+        raise CliError("region-plan output path must differ from --output")
+
     try:
         with input_path.open("r", encoding="utf-8") as stream:
             graph = json.load(stream)
@@ -527,11 +652,14 @@ def run(args):
     cluster_ids, semantic_edges = semantic_relationships(
         records, vectors, args.threshold, args.top_k
     )
+    region_plan = build_region_plan(records, graph_edges, cluster_ids)
     output = enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key)
-    write_json(args.output, output)
+    write_json(args.output, output, "output graph")
+    write_json(region_plan_path, region_plan, "region plan")
     print(
-        "graphify embedding complete: {} nodes, {} semantic edges, output {}".format(
-            len(records), len(semantic_edges), args.output
+        "graphify embedding complete: {} nodes, {} semantic edges, output {}, "
+        "region plan {}".format(
+            len(records), len(semantic_edges), args.output, region_plan_path
         )
     )
 

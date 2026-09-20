@@ -2,8 +2,8 @@
 # Public-CLI regression coverage for bin/fm-graphify-embed.py.
 #
 # A local HTTP server stands in for an OpenAI-compatible embeddings provider.
-# The test proves structured fingerprints, deterministic clusters, bounded
-# semantic edges, input preservation, and credential-safe diagnostics.
+# The test proves structured fingerprints and deterministic clusters.
+# It also proves bounded semantic edges, region-plan handoff data, input preservation, and credential-safe diagnostics.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -16,6 +16,8 @@ INPUT="$TMP_ROOT/graph.json"
 INPUT_COPY="$TMP_ROOT/graph-copy.json"
 OUTPUT_ONE="$TMP_ROOT/output-one.json"
 OUTPUT_TWO="$TMP_ROOT/output-two.json"
+REGIONS_ONE="$TMP_ROOT/regions-one.json"
+REGIONS_TWO="$TMP_ROOT/regions-two.json"
 PORT_FILE="$TMP_ROOT/port"
 REQUEST_LOG="$TMP_ROOT/requests.jsonl"
 SERVER_SCRIPT="$TMP_ROOT/server.py"
@@ -116,6 +118,7 @@ ENDPOINT="http://127.0.0.1:$PORT/v1/embeddings"
 
 run_tool() {
   local output=$1
+  local region_plan=$2
   OPENAI_API_KEY="$KEY" "$TOOL" \
     --input "$INPUT" \
     --endpoint "$ENDPOINT" \
@@ -123,31 +126,34 @@ run_tool() {
     --threshold 0.8 \
     --top-k 1 \
     --output "$output" \
+    --region-plan-output "$region_plan" \
     > "$STDOUT_FILE" 2> "$STDERR_FILE"
 }
 
-run_tool "$OUTPUT_ONE"
+run_tool "$OUTPUT_ONE" "$REGIONS_ONE"
 code=$?
 expect_code 0 "$code" "embedding CLI succeeds with fake provider"
 assert_contains "$(cat "$STDOUT_FILE")" 'graphify embedding complete: 3 nodes, 2 semantic edges' "CLI reports output counts"
 assert_equals '' "$(cat "$STDERR_FILE")" "successful CLI is quiet on stderr"
 
-run_tool "$OUTPUT_TWO"
+run_tool "$OUTPUT_TWO" "$REGIONS_TWO"
 code=$?
 expect_code 0 "$code" "repeated embedding CLI run succeeds"
+assert_equals 0 "$(cmp -s "$REGIONS_ONE" "$REGIONS_TWO"; printf '%s' "$?")" "identical inputs produce identical region plan"
 assert_equals 0 "$(cmp -s "$OUTPUT_ONE" "$OUTPUT_TWO"; printf '%s' "$?")" "identical inputs produce identical output"
 assert_equals 0 "$(cmp -s "$INPUT" "$INPUT_COPY"; printf '%s' "$?")" "input graph remains unchanged"
 
-python3 - "$OUTPUT_ONE" "$REQUEST_LOG" <<'PY'
+python3 - "$OUTPUT_ONE" "$REGIONS_ONE" "$REQUEST_LOG" <<'PY' || fail "region plan assertions failed"
 import json
 import sys
 
-output_path, request_path = sys.argv[1:]
+output_path, region_path, request_path = sys.argv[1:]
 with open(output_path, encoding="utf-8") as stream:
     graph = json.load(stream)
+with open(region_path, encoding="utf-8") as stream:
+    region_plan = json.load(stream)
 with open(request_path, encoding="utf-8") as stream:
     requests = [json.loads(line) for line in stream if line.strip()]
-
 assert len(requests) == 2, requests
 for request in requests:
     assert request["model"] == "test-embedding-model"
@@ -170,6 +176,32 @@ cluster_ids = {node["semantic_cluster_id"] for node in graph["nodes"]}
 assert len(cluster_ids) == 2, cluster_ids
 assert graph["nodes"][0]["semantic_cluster_id"] == graph["nodes"][1]["semantic_cluster_id"]
 assert graph["nodes"][0]["semantic_cluster_id"] != graph["nodes"][2]["semantic_cluster_id"]
+assert region_plan["schema"] == "graphify-region-plan/v1"
+clusters = {tuple(cluster["node_ids"]): cluster for cluster in region_plan["clusters"]}
+assert set(clusters) == {("account", "user"), ("invoice",)}
+assert clusters[("account", "user")]["source_paths"] == [
+    "src/account.py",
+    "src/user.py",
+]
+assert clusters[("account", "user")]["relation_summary"] == [
+    {"relation": "declares", "edge_count": 1},
+    {"relation": "references", "edge_count": 1},
+]
+assert clusters[("invoice",)]["relation_summary"] == [
+    {"relation": "references", "edge_count": 1}
+]
+representatives = clusters[("account", "user")]["representative_nodes"]
+assert [node["node_id"] for node in representatives] == ["account", "user"]
+assert all(len(node["neighbors"]) <= 12 for node in representatives)
+assert region_plan["cross_region_links"] == [
+    {
+        "source_cluster_id": clusters[("account", "user")]["cluster_id"],
+        "target_cluster_id": clusters[("invoice",)]["cluster_id"],
+        "relation": "references",
+        "edge_count": 1,
+        "examples": [{"source_node_id": "account", "target_node_id": "invoice"}],
+    }
+]
 PY
 combined_output=$(cat "$STDOUT_FILE" "$STDERR_FILE" "$REQUEST_LOG")
 case "$combined_output" in
