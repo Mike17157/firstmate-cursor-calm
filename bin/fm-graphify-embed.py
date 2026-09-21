@@ -82,8 +82,8 @@ class UnionFind:
 def parse_args(argv):
     parser = argparse.ArgumentParser(
         description=(
-            "Embed graphify-out/graph.json fingerprints and write a semantic "
-            "visualization graph."
+            "Embed graphify-out/graph.json fingerprints with a local or "
+            "OpenAI-compatible backend and write a semantic visualization graph."
         )
     )
     parser.add_argument(
@@ -108,6 +108,12 @@ def parse_args(argv):
         ),
     )
     parser.add_argument(
+        "--backend",
+        choices=("openai", "local"),
+        default="openai",
+        help="Embedding backend (default: openai).",
+    )
+    parser.add_argument(
         "--endpoint",
         default=None,
         metavar="URL",
@@ -123,6 +129,12 @@ def parse_args(argv):
         help=(
             "Embedding model name; otherwise read GRAPHIFY_EMBEDDINGS_MODEL."
         ),
+    )
+    parser.add_argument(
+        "--device",
+        default="cuda",
+        metavar="DEVICE",
+        help="Local sentence-transformers device (default: cuda).",
     )
     parser.add_argument(
         "--threshold",
@@ -415,6 +427,106 @@ def request_embeddings(url, model, fingerprints, api_key, timeout):
     return vectors
 
 
+def decode_local_embeddings(encoded, expected_count):
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if not isinstance(encoded, (list, tuple)):
+        raise CliError("local embedding model returned a non-array result")
+    if len(encoded) != expected_count:
+        raise CliError(
+            "local embedding model returned {} vectors for {} inputs".format(
+                len(encoded), expected_count
+            )
+        )
+    vectors = []
+    for position, raw_vector in enumerate(encoded):
+        if not isinstance(raw_vector, (list, tuple)):
+            raise CliError(
+                "local embedding model returned a malformed vector at index {}".format(
+                    position
+                )
+            )
+        vector = []
+        for component in raw_vector:
+            if isinstance(component, bool) or not isinstance(component, (int, float)):
+                raise CliError(
+                    "local embedding model returned a non-numeric vector component"
+                )
+            number = float(component)
+            if not math.isfinite(number):
+                raise CliError(
+                    "local embedding model returned a non-finite vector component"
+                )
+            vector.append(number)
+        if not vector:
+            raise CliError("local embedding model returned an empty vector")
+        vectors.append(vector)
+    dimension = len(vectors[0])
+    if any(len(vector) != dimension for vector in vectors):
+        raise CliError(
+            "local embedding model returned vectors with different dimensions"
+        )
+    return vectors
+
+
+def request_local_embeddings(model, fingerprints, device):
+    if device.startswith("cuda"):
+        try:
+            import torch
+        except ImportError:
+            raise CliError(
+                "CUDA device requested but PyTorch is unavailable; install "
+                "PyTorch with CUDA support"
+            )
+        try:
+            cuda_available = bool(torch.cuda.is_available())
+        except Exception as exc:
+            raise CliError(
+                "could not determine CUDA availability: {}".format(
+                    type(exc).__name__
+                )
+            )
+        if not cuda_available:
+            raise CliError(
+                "CUDA device requested but CUDA is unavailable; choose an "
+                "explicit non-CUDA --device or install a CUDA-enabled PyTorch"
+            )
+    if not fingerprints:
+        return []
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        raise CliError(
+            "local embedding backend requires sentence-transformers and "
+            "PyTorch; install both before using --backend local"
+        )
+    try:
+        encoder = SentenceTransformer(model, device=device)
+    except Exception as exc:
+        raise CliError(
+            "could not load local embedding model: {}".format(type(exc).__name__)
+        )
+    if device.startswith("cuda"):
+        actual_device = str(getattr(encoder, "device", ""))
+        if not actual_device.startswith("cuda"):
+            raise CliError(
+                "local embedding model did not use the requested CUDA device"
+            )
+    try:
+        encoded = encoder.encode(
+            fingerprints,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+    except Exception as exc:
+        raise CliError(
+            "local embedding model failed to encode graph fingerprints: {}".format(
+                type(exc).__name__
+            )
+        )
+    return decode_local_embeddings(encoded, len(fingerprints))
+
+
 def cosine(left, right):
     left_norm = math.sqrt(sum(value * value for value in left))
     right_norm = math.sqrt(sum(value * value for value in right))
@@ -615,12 +727,15 @@ def run(args):
     if args.timeout <= 0:
         raise CliError("--timeout must be greater than 0")
 
-    endpoint = configured_provider_value(
-        args.endpoint, DEFAULT_ENDPOINT_ENV, "endpoint"
-    )
+    url = None
+    api_key = ""
+    if args.backend == "openai":
+        endpoint = configured_provider_value(
+            args.endpoint, DEFAULT_ENDPOINT_ENV, "endpoint"
+        )
+        url = embedding_url(endpoint)
+        api_key = os.environ.get(args.api_key_env, "")
     model = configured_provider_value(args.model, DEFAULT_MODEL_ENV, "model")
-    url = embedding_url(endpoint)
-    api_key = os.environ.get(args.api_key_env, "")
 
     input_path = pathlib.Path(args.input)
     output_path = pathlib.Path(args.output)
@@ -648,7 +763,10 @@ def run(args):
     records = normalize_nodes(graph)
     edge_key, graph_edges = normalize_edges(graph)
     fingerprints = build_fingerprints(records, graph_edges)
-    vectors = request_embeddings(url, model, fingerprints, api_key, args.timeout)
+    if args.backend == "local":
+        vectors = request_local_embeddings(model, fingerprints, args.device)
+    else:
+        vectors = request_embeddings(url, model, fingerprints, api_key, args.timeout)
     cluster_ids, semantic_edges = semantic_relationships(
         records, vectors, args.threshold, args.top_k
     )

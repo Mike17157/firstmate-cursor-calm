@@ -8,13 +8,16 @@ It writes a visualization-ready JSON graph to the required `--output` path and a
 
 ## Run it
 
-Configure the endpoint and model explicitly for each run.
+Configure the selected backend and model explicitly for each run.
 
-Keep the API credential in the environment instead of passing it as an argument.
+Configure an endpoint when using the `openai` backend.
+
+Keep any API credential in the environment instead of passing it as an argument.
 
 ```sh
 OPENAI_API_KEY="$OPENAI_API_KEY" \
   bin/fm-graphify-embed.py \
+  --backend openai \
   --input graphify-out/graph.json \
   --endpoint https://embedding.example.invalid/v1/embeddings \
   --model text-embedding-3-small \
@@ -23,6 +26,26 @@ OPENAI_API_KEY="$OPENAI_API_KEY" \
   --output graphify-out/graph-semantic.json \
   --region-plan-output graphify-out/graph-semantic.regions.json
 ```
+
+The default `openai` backend calls the configured OpenAI-compatible endpoint.
+
+The `local` backend loads a standard sentence-transformers model in the current process and never calls an HTTP provider.
+
+```sh
+bin/fm-graphify-embed.py \
+  --backend local \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --device cuda \
+  --input graphify-out/graph.json \
+  --threshold 0.82 \
+  --top-k 3 \
+  --output graphify-out/graph-semantic.json \
+  --region-plan-output graphify-out/graph-semantic.regions.json
+```
+
+Install `sentence-transformers` and a CUDA-enabled PyTorch build before selecting the local backend with `--device cuda`.
+
+CUDA requests fail when PyTorch cannot report an available CUDA device, and the tool never falls back to CPU.
 
 `--endpoint` may name an OpenAI-compatible `/embeddings` route or a base URL to which `/embeddings` is appended.
 

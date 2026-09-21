@@ -24,6 +24,11 @@ SERVER_SCRIPT="$TMP_ROOT/server.py"
 STDOUT_FILE="$TMP_ROOT/stdout"
 STDERR_FILE="$TMP_ROOT/stderr"
 NO_PROVIDER_ERR="$TMP_ROOT/no-provider.stderr"
+LOCAL_MODULES="$TMP_ROOT/local-modules"
+NO_CUDA_MODULES="$TMP_ROOT/no-cuda-modules"
+LOCAL_OUTPUT="$TMP_ROOT/local-output.json"
+LOCAL_REGIONS="$TMP_ROOT/local-regions.json"
+GPU_ERR="$TMP_ROOT/gpu-refusal.stderr"
 KEY='graphify-test-key-never-printed'
 SERVER_PID=''
 
@@ -55,6 +60,36 @@ cat > "$INPUT" <<'JSON'
 }
 JSON
 cp "$INPUT" "$INPUT_COPY"
+mkdir -p "$LOCAL_MODULES" "$NO_CUDA_MODULES"
+cat > "$LOCAL_MODULES/torch.py" <<'PY'
+class cuda:
+    @staticmethod
+    def is_available():
+        return True
+PY
+cat > "$NO_CUDA_MODULES/torch.py" <<'PY'
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+PY
+cat > "$LOCAL_MODULES/sentence_transformers.py" <<'PY'
+class SentenceTransformer:
+    def __init__(self, model, device=None):
+        if model != "test-local-model" or device != "cuda":
+            raise RuntimeError("unexpected local model configuration")
+        self.device = device
+
+    def encode(self, fingerprints, convert_to_numpy=True, show_progress_bar=False):
+        if not convert_to_numpy or show_progress_bar:
+            raise RuntimeError("unexpected encode configuration")
+        return [
+            [1.0, 0.0],
+            [0.9, 0.435889894],
+            [0.0, 1.0],
+        ][: len(fingerprints)]
+PY
+cp "$LOCAL_MODULES/sentence_transformers.py" "$NO_CUDA_MODULES/sentence_transformers.py"
 
 cat > "$SERVER_SCRIPT" <<'PY'
 import json
@@ -130,6 +165,22 @@ run_tool() {
     > "$STDOUT_FILE" 2> "$STDERR_FILE"
 }
 
+run_local_tool() {
+  local output=$1
+  local region_plan=$2
+  env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \
+    PYTHONPATH="$LOCAL_MODULES${PYTHONPATH:+:$PYTHONPATH}" "$TOOL" \
+    --backend local \
+    --model test-local-model \
+    --device cuda \
+    --input "$INPUT" \
+    --threshold 0.8 \
+    --top-k 1 \
+    --output "$output" \
+    --region-plan-output "$region_plan" \
+    > "$STDOUT_FILE" 2> "$STDERR_FILE"
+}
+
 run_tool "$OUTPUT_ONE" "$REGIONS_ONE"
 code=$?
 expect_code 0 "$code" "embedding CLI succeeds with fake provider"
@@ -142,16 +193,42 @@ expect_code 0 "$code" "repeated embedding CLI run succeeds"
 assert_equals 0 "$(cmp -s "$REGIONS_ONE" "$REGIONS_TWO"; printf '%s' "$?")" "identical inputs produce identical region plan"
 assert_equals 0 "$(cmp -s "$OUTPUT_ONE" "$OUTPUT_TWO"; printf '%s' "$?")" "identical inputs produce identical output"
 assert_equals 0 "$(cmp -s "$INPUT" "$INPUT_COPY"; printf '%s' "$?")" "input graph remains unchanged"
+run_local_tool "$LOCAL_OUTPUT" "$LOCAL_REGIONS"
+code=$?
+expect_code 0 "$code" "local embedding backend succeeds with fake CUDA provider"
+assert_contains "$(cat "$STDOUT_FILE")" 'graphify embedding complete: 3 nodes, 2 semantic edges' "local backend reports output counts"
+assert_equals '' "$(cat "$STDERR_FILE")" "local backend is quiet on stderr"
 
-python3 - "$OUTPUT_ONE" "$REGIONS_ONE" "$REQUEST_LOG" <<'PY' || fail "region plan assertions failed"
+set +e
+env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \
+  PYTHONPATH="$NO_CUDA_MODULES${PYTHONPATH:+:$PYTHONPATH}" "$TOOL" \
+  --backend local \
+  --model test-local-model \
+  --device cuda \
+  --input "$INPUT" \
+  --threshold 0.8 \
+  --top-k 1 \
+  --output "$TMP_ROOT/gpu-refusal.json" \
+  --region-plan-output "$TMP_ROOT/gpu-refusal.regions.json" \
+  > /dev/null 2> "$GPU_ERR"
+code=$?
+set -u
+expect_code 2 "$code" "CUDA refusal is an actionable error"
+assert_contains "$(cat "$GPU_ERR")" "CUDA device requested but CUDA is unavailable" "CUDA refusal explains missing GPU"
+
+python3 - "$OUTPUT_ONE" "$REGIONS_ONE" "$REQUEST_LOG" "$LOCAL_OUTPUT" "$LOCAL_REGIONS" <<'PY' || fail "region plan assertions failed"
 import json
 import sys
 
-output_path, region_path, request_path = sys.argv[1:]
+output_path, region_path, request_path, local_output_path, local_region_path = sys.argv[1:]
 with open(output_path, encoding="utf-8") as stream:
     graph = json.load(stream)
 with open(region_path, encoding="utf-8") as stream:
     region_plan = json.load(stream)
+with open(local_output_path, encoding="utf-8") as stream:
+    local_graph = json.load(stream)
+with open(local_region_path, encoding="utf-8") as stream:
+    local_region_plan = json.load(stream)
 with open(request_path, encoding="utf-8") as stream:
     requests = [json.loads(line) for line in stream if line.strip()]
 assert len(requests) == 2, requests
@@ -202,6 +279,11 @@ assert region_plan["cross_region_links"] == [
         "examples": [{"source_node_id": "account", "target_node_id": "invoice"}],
     }
 ]
+local_semantic = [
+    edge for edge in local_graph["edges"] if edge.get("type") == "semantically_similar_to"
+]
+assert len(local_semantic) == 2, local_semantic
+assert local_region_plan["schema"] == "graphify-region-plan/v1"
 PY
 combined_output=$(cat "$STDOUT_FILE" "$STDERR_FILE" "$REQUEST_LOG")
 case "$combined_output" in
@@ -209,7 +291,7 @@ case "$combined_output" in
 esac
 
 
-pass "fake provider embedding, deterministic clustering, graph preservation, and secret handling"
+pass "fake OpenAI and local CUDA backends, deterministic clustering, region plans, graph preservation, and secret handling"
 
 set +e
 env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \
