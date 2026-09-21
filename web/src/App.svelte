@@ -20,6 +20,9 @@
   let selectedRole = "";
   let healthTimer;
   let loadTimer;
+  const LAYOUT_ITERATIONS = 48;
+  let layoutPositions = new Map();
+  let layoutAnchors = new Map();
 
   const ROLE_COLORS = {
     test: "#f472b6",
@@ -60,6 +63,123 @@
     return ROLE_COLORS[role] || ROLE_COLORS.file_module;
   }
 
+  function stableHash(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0) / 4294967296;
+  }
+
+  function stablePoint(nodeId) {
+    const angle = stableHash(`${nodeId}:angle`) * Math.PI * 2;
+    const radius = 0.2 + stableHash(`${nodeId}:radius`) * 0.5;
+    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+  }
+
+  function averagePoint(points) {
+    if (!points.length) return { x: 0, y: 0 };
+    const sum = points.reduce(
+      (total, point) => ({ x: total.x + point.x, y: total.y + point.y }),
+      { x: 0, y: 0 }
+    );
+    return { x: sum.x / points.length, y: sum.y / points.length };
+  }
+
+  function layoutGraph(nodes, edges) {
+    const positions = new Map();
+    const velocities = new Map();
+    const nodeIds = nodes.map((node) => node.id).sort();
+    for (const node of nodes) {
+      const memberIds = (node.node_ids || [node.id]).slice().sort();
+      const inherited = memberIds.map((id) => layoutAnchors.get(id)).filter(Boolean);
+      const previous = layoutPositions.get(node.id);
+      const seed = previous || averagePoint(inherited.length ? inherited : memberIds.map(stablePoint));
+      positions.set(node.id, { x: seed.x, y: seed.y });
+      velocities.set(node.id, { x: 0, y: 0 });
+    }
+
+    const validEdges = edges
+      .filter((edge) => positions.has(edge.source) && positions.has(edge.target) && edge.source !== edge.target)
+      .slice()
+      .sort((left, right) => {
+        const leftKey = `${left.source}:${left.target}`;
+        const rightKey = `${right.source}:${right.target}`;
+        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+      });
+    for (let iteration = 0; iteration < LAYOUT_ITERATIONS; iteration += 1) {
+      const forces = new Map(nodeIds.map((id) => [id, { x: 0, y: 0 }]));
+      for (let leftIndex = 0; leftIndex < nodeIds.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < nodeIds.length; rightIndex += 1) {
+          const left = nodeIds[leftIndex];
+          const right = nodeIds[rightIndex];
+          const leftPoint = positions.get(left);
+          const rightPoint = positions.get(right);
+          let dx = rightPoint.x - leftPoint.x;
+          let dy = rightPoint.y - leftPoint.y;
+          let distance = Math.hypot(dx, dy);
+          if (distance < 0.0001) {
+            const angle = stableHash(`${left}:${right}:collision`) * Math.PI * 2;
+            dx = Math.cos(angle) * 0.0001;
+            dy = Math.sin(angle) * 0.0001;
+            distance = 0.0001;
+          }
+          const repulsion = Math.min(0.08, 0.006 / (distance * distance));
+          const forceX = (dx / distance) * repulsion;
+          const forceY = (dy / distance) * repulsion;
+          forces.get(left).x -= forceX;
+          forces.get(left).y -= forceY;
+          forces.get(right).x += forceX;
+          forces.get(right).y += forceY;
+        }
+      }
+      for (const edge of validEdges) {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const distance = Math.max(0.0001, Math.hypot(dx, dy));
+        const spring = (distance - 0.24) * 0.08;
+        forces.get(edge.source).x += (dx / distance) * spring;
+        forces.get(edge.source).y += (dy / distance) * spring;
+        forces.get(edge.target).x -= (dx / distance) * spring;
+        forces.get(edge.target).y -= (dy / distance) * spring;
+      }
+      for (const id of nodeIds) {
+        const velocity = velocities.get(id);
+        const force = forces.get(id);
+        velocity.x = (velocity.x + force.x) * 0.82;
+        velocity.y = (velocity.y + force.y) * 0.82;
+        const point = positions.get(id);
+        point.x = Math.max(-1, Math.min(1, point.x + velocity.x));
+        point.y = Math.max(-1, Math.min(1, point.y + velocity.y));
+      }
+    }
+    const center = averagePoint([...positions.values()]);
+    for (const point of positions.values()) {
+      point.x -= center.x;
+      point.y -= center.y;
+    }
+
+
+    let extent = 0;
+    for (const point of positions.values()) {
+      extent = Math.max(extent, Math.abs(point.x), Math.abs(point.y));
+    }
+    const scale = extent > 0.88 ? 0.88 / extent : 1;
+    for (const node of nodes) {
+      const point = positions.get(node.id);
+      point.x *= scale;
+      point.y *= scale;
+      layoutPositions.set(node.id, { ...point });
+      for (const memberId of node.node_ids || [node.id]) {
+        layoutAnchors.set(memberId, { ...point });
+      }
+    }
+    return positions;
+  }
+
   function scheduleLoad(level, center = focus) {
     clearTimeout(loadTimer);
     loadTimer = setTimeout(() => loadGraph(level, center), 140);
@@ -74,19 +194,19 @@
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "graph request failed");
       const camera = sigma.getCamera().getState();
+      const previousLevel = activeLevel;
       activeLevel = payload.level;
       generation = payload.graph_generation;
       truncated = payload.truncated;
       graph.clear();
-      const count = payload.nodes.length;
-      payload.nodes.forEach((node, index) => {
-        const angle = count ? (index / count) * Math.PI * 2 : 0;
-        const radius = count > 1 ? 0.18 + (index % 5) * 0.045 : 0;
+      const positions = layoutGraph(payload.nodes, payload.edges);
+      payload.nodes.forEach((node) => {
+        const point = positions.get(node.id);
         const role = node.role || (activeLevel === "region" ? "structural_region" : activeLevel === "file" ? "file_module" : "function");
         graph.addNode(node.id, {
           label: node.label,
-          x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius,
+          x: point.x,
+          y: point.y,
           size: activeLevel === "region" ? 10 : activeLevel === "file" ? 7 : 5,
           color: colorForRole(role),
           borderColor: colorForRole(role),
@@ -114,7 +234,8 @@
         });
       });
       sigma.refresh();
-      sigma.getCamera().setState(camera);
+      const nextCamera = previousLevel === activeLevel ? camera : { ...camera, x: 0, y: 0 };
+      sigma.getCamera().setState(nextCamera);
       status = `${levelLabel[activeLevel]} · ${payload.nodes.length} nodes · ${payload.edges.length} calls${truncated ? " · capped" : ""}`;
     } catch (error) {
       status = `Graph error: ${error.message}`;
