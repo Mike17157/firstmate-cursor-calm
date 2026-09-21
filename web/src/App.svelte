@@ -34,6 +34,7 @@
     function: "#f59e0b",
     file_module: "#22d3ee",
     structural_region: "#8b5cf6",
+    structural_cluster: "#c084fc",
   };
   const ROLE_LABELS = {
     test: "test script / test",
@@ -41,18 +42,22 @@
     function: "function / method",
     file_module: "file / module",
     structural_region: "structural region",
+    structural_cluster: "topology cluster",
   };
   const levelLabel = {
-    region: "clusters",
+    cluster: "clusters",
+    region: "regions",
     file: "files / modules",
     function: "functions",
   };
 
   function levelForRatio(ratio) {
-    if (ratio >= 1.35) return "region";
+    if (ratio >= 1.55) return "cluster";
+    if (ratio >= 1.15) return "region";
     if (ratio >= 0.7) return "file";
     return "function";
   }
+
 
   function valueForRatio(ratio) {
     return Math.max(0, Math.min(1, (2.2 - ratio) / 1.9));
@@ -87,7 +92,8 @@
 
   function labelVisible(attrs, ratio, selected) {
     if (selected) return true;
-    if (attrs.level === "region") return ratio >= 1.35;
+    if (attrs.level === "cluster") return ratio >= 1.55;
+    if (attrs.level === "region") return ratio < 1.45;
     if (attrs.level === "file") return ratio < 1.12;
     return ratio < 0.7;
   }
@@ -111,7 +117,7 @@
   function layoutScene(nodes, edges) {
     for (const node of nodes.slice().sort((left, right) => left.id.localeCompare(right.id))) {
       const point = stablePoint(node.id);
-      const size = node.level === "region" ? 10 : node.level === "file" ? 7 : 5;
+      const size = node.level === "cluster" ? 12 : node.level === "region" ? 10 : node.level === "file" ? 7 : 5;
       graph.addNode(node.id, {
         label: node.label,
         x: point.x,
@@ -343,11 +349,12 @@
     <section class="graph-panel" aria-label="Graph canvas">
       <div class="canvas" bind:this={canvas}></div>
       <div class="legend" aria-label="Node role legend">
+        <span><i class="cluster"></i>topology cluster</span>
+        <span><i class="region"></i>structural region</span>
         <span><i class="test"></i>test script / test</span>
         <span><i class="leaf"></i>leaf node</span>
         <span><i class="function"></i>function / method</span>
         <span><i class="file"></i>file / module</span>
-        <span><i class="region"></i>topology cluster</span>
         <span class="selection-marker"><i></i>[selected] neutral ring</span>
         <span>Wheel to zoom · click a node to inspect</span>
       </div>
@@ -401,11 +408,12 @@
   .legend { position: absolute; left: 18px; bottom: 18px; display: flex; gap: 14px; flex-wrap: wrap; padding: 9px 11px; border: 1px solid #1e293b; border-radius: 8px; background: #0d1728df; color: #94a3b8; font-size: 11px; pointer-events: none; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .legend .cluster { background: #c084fc; }
+  .legend .region { background: #8b5cf6; }
   .legend .test { background: #f472b6; }
   .legend .leaf { background: #a3e635; }
   .legend .function { background: #f59e0b; }
   .legend .file { background: #22d3ee; }
-  .legend .region { background: #8b5cf6; }
   .legend .selection-marker i { width: 9px; height: 9px; border: 2px solid #f8fafc; border-radius: 2px; background: transparent; }
   .inspector { overflow: auto; border-left: 1px solid #1e293b; background: #0b1524; padding: 17px; }
   .inspector section + section { margin-top: 24px; }
@@ -417,7 +425,7 @@
   .role-chip.role-leaf { color: #a3e635; }
   .role-chip.role-function { color: #f59e0b; }
   .role-chip.role-file_module { color: #22d3ee; }
-  .role-chip.role-structural_region { color: #8b5cf6; }
+  .role-chip.role-structural_cluster { color: #c084fc; }
   .result { display: grid; gap: 2px; width: 100%; text-align: left; }
   .result strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .result small, .muted { color: #64748b; }

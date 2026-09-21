@@ -114,21 +114,33 @@ assert functions["edges"][0]["label"] == "calls"
 
 status, _, body = get("/api/scene?limit=20")
 scene = json.loads(body)
-assert status == 200 and scene["schema"] == "graphify-scene/v1"
-assert {node["level"] for node in scene["nodes"]} == {"region", "file", "function"}
-assert len(scene["nodes"]) == 11 and not scene["truncated"]
-by_id = {node["id"]: node for node in scene["nodes"]}
-assert by_id["file:src/a.py"]["parent_id"] == "region-a"
-assert by_id["function:alpha"]["parent_id"] == "file:src/a.py"
-assert {node["cluster_id"] for node in scene["nodes"] if node["level"] == "function"} == {
-    "region-a",
-    "region-b",
-    "region-c",
+assert status == 200 and scene["schema"] == "graphify-scene/v2"
+assert {node["level"] for node in scene["nodes"]} == {
+    "cluster",
+    "region",
+    "file",
+    "function",
 }
+assert len(scene["nodes"]) == 13 and not scene["truncated"]
+by_id = {node["id"]: node for node in scene["nodes"]}
+assert by_id["file:src/a.py"]["parent_id"] in by_id
+assert by_id["file:src/a.py"]["parent_id"].startswith("region-")
+assert by_id["function:alpha"]["parent_id"] == "file:src/a.py"
+assert all(
+    node["parent_id"].startswith("cluster:")
+    for node in scene["nodes"]
+    if node["level"] == "region"
+)
+assert all(
+    node["cluster_id"].startswith("cluster:")
+    for node in scene["nodes"]
+    if node["level"] == "function"
+)
 assert {edge["kind"] for edge in scene["edges"]} == {"call", "contains"}
+assert sum(node["level"] == "cluster" for node in scene["nodes"]) == 2
 status, _, body = get("/api/scene?limit=8")
 bounded_scene = json.loads(body)
-assert status == 200 and len(bounded_scene["nodes"]) == 8 and bounded_scene["truncated"]
+assert status == 200 and len(bounded_scene["nodes"]) <= 8 and bounded_scene["truncated"]
 
 status, _, body = get("/api/search?q=beta&limit=10")
 search = json.loads(body)

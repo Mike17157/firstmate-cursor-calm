@@ -9,6 +9,7 @@ Only Python's standard library is required.
 
 import argparse
 import hashlib
+import math
 import importlib.util
 import json
 import mimetypes
@@ -452,12 +453,18 @@ class GraphSnapshot:
                 level, entity, incident_edges[entity_id]
             )
 
-    def _scene_call_edges(self, level, entities):
+    def _scene_call_edges(self, level, entities, region_clusters=None):
         grouped = defaultdict(int)
         relations = defaultdict(set)
         for edge in self.calls:
-            source = self._entity_for_node(level, edge["source"], entities)
-            target = self._entity_for_node(level, edge["target"], entities)
+            if level == "cluster":
+                source_region = self.nodes[edge["source"]]["region"]
+                target_region = self.nodes[edge["target"]]["region"]
+                source = region_clusters[source_region]
+                target = region_clusters[target_region]
+            else:
+                source = self._entity_for_node(level, edge["source"], entities)
+                target = self._entity_for_node(level, edge["target"], entities)
             if source == target:
                 continue
             key = (source, target)
@@ -481,6 +488,71 @@ class GraphSnapshot:
             )
         return output
 
+    def _region_clusters(self, regions):
+        region_ids = sorted(regions)
+        if not region_ids:
+            return {}, {}
+        target_count = min(24, max(1, math.ceil(math.sqrt(len(region_ids)))))
+        seeds = [
+            region_ids[min(len(region_ids) - 1, (index * len(region_ids)) // target_count)]
+            for index in range(target_count)
+        ]
+        seeds = list(dict.fromkeys(seeds))
+        adjacency = defaultdict(lambda: defaultdict(int))
+        for edge in self.calls:
+            source = self.nodes[edge["source"]]["region"]
+            target = self.nodes[edge["target"]]["region"]
+            if source != target:
+                adjacency[source][target] += 1
+                adjacency[target][source] += 1
+        members = {seed: [seed] for seed in seeds}
+        for region_id in region_ids:
+            if region_id in members:
+                continue
+            scores = {
+                seed: sum(adjacency[region_id].get(member, 0) for member in grouped)
+                for seed, grouped in members.items()
+            }
+            best_score = max(scores.values())
+            if best_score:
+                seed = min(seed for seed, score in scores.items() if score == best_score)
+            else:
+                digest = hashlib.sha256(region_id.encode("utf-8")).hexdigest()
+                seed = seeds[int(digest[:8], 16) % len(seeds)]
+            members[seed].append(region_id)
+        clusters = {}
+        region_clusters = {}
+        for index, grouped in enumerate(
+            sorted((sorted(grouped) for grouped in members.values())), 1
+        ):
+            cluster_id = "cluster:" + hashlib.sha256(
+                "\0".join(grouped).encode("utf-8")
+            ).hexdigest()[:16]
+            clusters[cluster_id] = {
+                "id": cluster_id,
+                "label": "cluster-{:02d} · {} regions".format(index, len(grouped)),
+                "level": "cluster",
+                "role": "structural_cluster",
+                "parent_id": None,
+                "cluster_id": cluster_id,
+                "source_paths": sorted(
+                    {
+                        path
+                        for region_id in grouped
+                        for path in regions[region_id]["source_paths"]
+                    }
+                ),
+                "node_ids": [
+                    node_id
+                    for region_id in grouped
+                    for node_id in regions[region_id]["node_ids"]
+                ],
+                "member_count": len(grouped),
+            }
+            for region_id in grouped:
+                region_clusters[region_id] = cluster_id
+        return clusters, region_clusters
+
     def scene(self, limit):
         level_entities = {
             level: self._entities(level)
@@ -488,65 +560,157 @@ class GraphSnapshot:
         }
         for level, entities in level_entities.items():
             self._assign_entity_roles(level, entities)
+        clusters, region_clusters = self._region_clusters(level_entities["region"])
 
-        all_nodes = []
-        for level in ("region", "file", "function"):
-            entities = level_entities[level]
-            for entity_id in sorted(entities):
-                entity = entities[entity_id]
-                if level == "region":
-                    parent_id = None
-                    cluster_id = entity_id
-                elif level == "file":
-                    member = self.nodes[entity["node_ids"][0]]
-                    parent_id = member["region"]
-                    cluster_id = parent_id
-                else:
-                    member = self.nodes[entity["node_ids"][0]]
-                    parent_id = "file:" + (
+        region_nodes = []
+        for entity_id in sorted(level_entities["region"]):
+            entity = level_entities["region"][entity_id]
+            region_nodes.append(
+                {
+                    "id": entity_id,
+                    "label": entity["label"],
+                    "level": "region",
+                    "role": entity["role"],
+                    "parent_id": region_clusters[entity_id],
+                    "cluster_id": region_clusters[entity_id],
+                    "source_paths": entity["source_paths"],
+                    "node_ids": entity["node_ids"],
+                    "member_count": entity["member_count"],
+                }
+            )
+
+        file_nodes = []
+        for entity_id in sorted(level_entities["file"]):
+            entity = level_entities["file"][entity_id]
+            member = self.nodes[entity["node_ids"][0]]
+            region_id = member["region"]
+            file_nodes.append(
+                {
+                    "id": entity_id,
+                    "label": entity["label"],
+                    "level": "file",
+                    "role": entity["role"],
+                    "parent_id": region_id,
+                    "cluster_id": region_clusters[region_id],
+                    "source_paths": entity["source_paths"],
+                    "node_ids": entity["node_ids"],
+                    "member_count": entity["member_count"],
+                }
+            )
+
+        function_nodes = []
+        for entity_id in sorted(level_entities["function"]):
+            entity = level_entities["function"][entity_id]
+            member = self.nodes[entity["node_ids"][0]]
+            region_id = member["region"]
+            function_nodes.append(
+                {
+                    "id": entity_id,
+                    "label": entity["label"],
+                    "level": "function",
+                    "role": entity["role"],
+                    "parent_id": "file:" + (
                         member["module"] or member["source_path"] or entity["node_ids"][0]
-                    )
-                    cluster_id = member["region"]
-                all_nodes.append(
-                    {
-                        "id": entity_id,
-                        "label": entity["label"],
-                        "level": level,
-                        "role": entity["role"],
-                        "parent_id": parent_id,
-                        "cluster_id": cluster_id,
-                        "source_paths": entity["source_paths"],
-                        "node_ids": entity["node_ids"],
-                        "member_count": entity["member_count"],
-                    }
-                )
+                    ),
+                    "cluster_id": region_clusters[region_id],
+                    "source_paths": entity["source_paths"],
+                    "node_ids": entity["node_ids"],
+                    "member_count": entity["member_count"],
+                }
+            )
 
-        selected_nodes = all_nodes[:limit]
+        def take_spread(nodes, budget, group_key):
+            groups = defaultdict(list)
+            for node in nodes:
+                groups[group_key(node)].append(node)
+            for grouped in groups.values():
+                grouped.sort(key=lambda node: node["id"])
+            selected = []
+            while len(selected) < budget:
+                added = False
+                for group_id in sorted(groups):
+                    if groups[group_id]:
+                        selected.append(groups[group_id].pop(0))
+                        added = True
+                        if len(selected) >= budget:
+                            break
+                if not added:
+                    break
+            return selected
+
+        cluster_nodes = [clusters[cluster_id] for cluster_id in sorted(clusters)]
+        cluster_budget = min(len(cluster_nodes), max(1, limit // 8))
+        selected_clusters = cluster_nodes[:cluster_budget]
+        selected_cluster_ids = {node["id"] for node in selected_clusters}
+        region_budget = min(
+            len(region_nodes), max(0, (limit - len(selected_clusters)) // 3)
+        )
+        selected_regions = take_spread(
+            [
+                node
+                for node in region_nodes
+                if node["parent_id"] in selected_cluster_ids
+            ],
+            region_budget,
+            lambda node: node["parent_id"],
+        )
+        selected_region_ids = {node["id"] for node in selected_regions}
+        file_budget = min(
+            len(file_nodes),
+            max(0, (limit - len(selected_clusters) - len(selected_regions)) // 2),
+        )
+        selected_files = take_spread(
+            [node for node in file_nodes if node["parent_id"] in selected_region_ids],
+            file_budget,
+            lambda node: node["parent_id"],
+        )
+        selected_file_ids = {node["id"] for node in selected_files}
+        function_budget = max(
+            0,
+            limit
+            - len(selected_clusters)
+            - len(selected_regions)
+            - len(selected_files),
+        )
+        selected_functions = take_spread(
+            [
+                node
+                for node in function_nodes
+                if node["parent_id"] in selected_file_ids
+            ],
+            function_budget,
+            lambda node: node["parent_id"],
+        )
+        selected_nodes = (
+            selected_clusters + selected_regions + selected_files + selected_functions
+        )
         selected_ids = {node["id"] for node in selected_nodes}
+
         edges = []
+        edges.extend(self._scene_call_edges("cluster", level_entities["region"], region_clusters))
         for level in ("region", "file", "function"):
             edges.extend(self._scene_call_edges(level, level_entities[level]))
-        for node in all_nodes:
-            if node["parent_id"]:
-                edges.append(
-                    {
-                        "id": "contains:{}:{}".format(node["parent_id"], node["id"]),
-                        "source": node["parent_id"],
-                        "target": node["id"],
-                        "level": node["level"],
-                        "kind": "contains",
-                        "relation": "contains",
-                        "label": "",
-                        "count": 1,
-                    }
-                )
+        for node in (*region_nodes, *file_nodes, *function_nodes):
+            edges.append(
+                {
+                    "id": "contains:{}:{}".format(node["parent_id"], node["id"]),
+                    "source": node["parent_id"],
+                    "target": node["id"],
+                    "level": node["level"],
+                    "kind": "contains",
+                    "relation": "contains",
+                    "label": "",
+                    "count": 1,
+                }
+            )
         selected_edges = [
             edge
             for edge in sorted(edges, key=lambda edge: edge["id"])
             if edge["source"] in selected_ids and edge["target"] in selected_ids
         ][:limit]
+        all_nodes = cluster_nodes + region_nodes + file_nodes + function_nodes
         return {
-            "schema": "graphify-scene/v1",
+            "schema": "graphify-scene/v2",
             "nodes": selected_nodes,
             "edges": selected_edges,
             "truncated": len(selected_nodes) < len(all_nodes),
@@ -555,6 +719,7 @@ class GraphSnapshot:
             "max_visible": limit,
             "graph_generation": self.generation,
         }
+
 
 
     def subgraph(self, level, center, limit):
