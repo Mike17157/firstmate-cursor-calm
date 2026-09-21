@@ -28,6 +28,8 @@ LOCAL_MODULES="$TMP_ROOT/local-modules"
 NO_CUDA_MODULES="$TMP_ROOT/no-cuda-modules"
 LOCAL_OUTPUT="$TMP_ROOT/local-output.json"
 LOCAL_REGIONS="$TMP_ROOT/local-regions.json"
+STRUCTURAL_OUTPUT="$TMP_ROOT/structural-output.json"
+STRUCTURAL_REGIONS="$TMP_ROOT/structural-regions.json"
 GPU_ERR="$TMP_ROOT/gpu-refusal.stderr"
 KEY='graphify-test-key-never-printed'
 SERVER_PID=''
@@ -183,6 +185,18 @@ run_local_tool() {
     > "$STDOUT_FILE" 2> "$STDERR_FILE"
 }
 
+run_structural_tool() {
+  env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \
+    "$TOOL" \
+    --backend structural \
+    --input "$INPUT" \
+    --threshold 0.8 \
+    --top-k 1 \
+    --output "$STRUCTURAL_OUTPUT" \
+    --region-plan-output "$STRUCTURAL_REGIONS" \
+    > "$STDOUT_FILE" 2> "$STDERR_FILE"
+}
+
 run_tool "$OUTPUT_ONE" "$REGIONS_ONE"
 code=$?
 expect_code 0 "$code" "embedding CLI succeeds with fake provider"
@@ -200,6 +214,11 @@ code=$?
 expect_code 0 "$code" "local embedding backend succeeds with fake CUDA provider"
 assert_contains "$(cat "$STDOUT_FILE")" 'graphify embedding complete: 3 nodes, 2 semantic edges' "local backend reports output counts"
 assert_equals '' "$(cat "$STDERR_FILE")" "local backend is quiet on stderr"
+run_structural_tool
+code=$?
+expect_code 0 "$code" "structural region backend succeeds without provider"
+assert_contains "$(cat "$STDOUT_FILE")" "graphify structural region plan complete: 3 nodes, 1 regions" "structural backend reports region count"
+assert_equals '' "$(cat "$STDERR_FILE")" "structural backend is quiet on stderr"
 
 set +e
 env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \
@@ -218,11 +237,11 @@ set -u
 expect_code 2 "$code" "CUDA refusal is an actionable error"
 assert_contains "$(cat "$GPU_ERR")" "CUDA device requested but CUDA is unavailable" "CUDA refusal explains missing GPU"
 
-python3 - "$OUTPUT_ONE" "$REGIONS_ONE" "$REQUEST_LOG" "$LOCAL_OUTPUT" "$LOCAL_REGIONS" <<'PY' || fail "region plan assertions failed"
+python3 - "$OUTPUT_ONE" "$REGIONS_ONE" "$REQUEST_LOG" "$LOCAL_OUTPUT" "$LOCAL_REGIONS" "$STRUCTURAL_OUTPUT" "$STRUCTURAL_REGIONS" <<'PY' || fail "region plan assertions failed"
 import json
 import sys
 
-output_path, region_path, request_path, local_output_path, local_region_path = sys.argv[1:]
+output_path, region_path, request_path, local_output_path, local_region_path, structural_output_path, structural_region_path = sys.argv[1:]
 with open(output_path, encoding="utf-8") as stream:
     graph = json.load(stream)
 with open(region_path, encoding="utf-8") as stream:
@@ -231,6 +250,10 @@ with open(local_output_path, encoding="utf-8") as stream:
     local_graph = json.load(stream)
 with open(local_region_path, encoding="utf-8") as stream:
     local_region_plan = json.load(stream)
+with open(structural_output_path, encoding="utf-8") as stream:
+    structural_graph = json.load(stream)
+with open(structural_region_path, encoding="utf-8") as stream:
+    structural_region_plan = json.load(stream)
 with open(request_path, encoding="utf-8") as stream:
     requests = [json.loads(line) for line in stream if line.strip()]
 assert len(requests) == 2, requests
@@ -300,6 +323,22 @@ local_semantic = [
 ]
 assert len(local_semantic) == 2, local_semantic
 assert local_region_plan["schema"] == "graphify-region-plan/v1"
+assert not [
+    edge for edge in structural_graph["edges"]
+    if edge.get("type") == "semantically_similar_to"
+]
+assert all("structural_region_id" in node for node in structural_graph["nodes"])
+assert structural_region_plan["strategy"] == "structural_ast"
+assert len(structural_region_plan["clusters"]) == 1
+assert structural_region_plan["clusters"][0]["node_ids"] == [
+    "account",
+    "invoice",
+    "user",
+]
+assert any(
+    edge["source"] == "claude_mods_firstmate_calm_hooks_register"
+    for edge in structural_graph["edges"]
+)
 PY
 combined_output=$(cat "$STDOUT_FILE" "$STDERR_FILE" "$REQUEST_LOG")
 case "$combined_output" in
@@ -307,7 +346,7 @@ case "$combined_output" in
 esac
 
 
-pass "fake OpenAI and local CUDA backends, deterministic clustering, region plans, graph preservation, and secret handling"
+pass "fake OpenAI, local CUDA, and structural AST backends preserve graph regions and secrets"
 
 set +e
 env -u OPENAI_API_KEY -u GRAPHIFY_EMBEDDINGS_ENDPOINT -u GRAPHIFY_EMBEDDINGS_MODEL \

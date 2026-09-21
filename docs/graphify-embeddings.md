@@ -1,4 +1,4 @@
-# Graphify semantic embeddings
+# Graphify semantic and structural regions
 
 `bin/fm-graphify-embed.py` enriches an existing Graphify JSON export without changing the input file.
 
@@ -47,11 +47,30 @@ Install `sentence-transformers` and a CUDA-enabled PyTorch build before selectin
 
 CUDA requests fail when PyTorch cannot report an available CUDA device, and the tool never falls back to CPU.
 
+## Structural splitting without embeddings
+
+The `structural` backend requires no embedding provider, model, credential, or network access.
+
+```sh
+bin/fm-graphify-embed.py \
+  --backend structural \
+  --input graphify-out/graph.json \
+  --threshold 0.82 \
+  --top-k 3 \
+  --output graphify-out/graph-structural.json \
+  --region-plan-output graphify-out/graph-structural.regions.json
+```
+
+Structural regions are deterministic weakly connected components of valid original graph edges, with edge direction ignored and prior semantic edges excluded.
+
+Structural output nodes receive `structural_region_id`, and the region plan records `strategy: structural_ast`.
+
+The structural path preserves every original edge, including edges whose endpoints are absent from the node set.
+
 `--endpoint` may name an OpenAI-compatible `/embeddings` route or a base URL to which `/embeddings` is appended.
 
 The endpoint must be an absolute HTTP or HTTPS URL.
 
-`--model`, `--threshold`, `--top-k`, and `--output` are required so the embedding and clustering choices are visible in the command.
 
 `--region-plan-output` selects the Luna and Jev handoff artifact path.
 
@@ -59,7 +78,7 @@ When it is omitted, `graph-semantic.json` produces `graph-semantic.regions.json`
 
 The endpoint and model may instead come from `GRAPHIFY_EMBEDDINGS_ENDPOINT` and `GRAPHIFY_EMBEDDINGS_MODEL` when a local wrapper needs environment configuration.
 
-A missing endpoint or model produces an actionable error before any network call.
+`--threshold`, `--top-k`, and `--output` are required for every run, while `--model` is required only for embedding backends.
 
 The default credential variable is `OPENAI_API_KEY`, and `--api-key-env NAME` selects another environment variable without exposing its value to the process arguments or diagnostics.
 
@@ -129,7 +148,7 @@ Semantic edges are not used as cross-region links because threshold-connected no
 
 ## Luna and Jev handoff
 
-The host agent may give Luna the region plan and visualization graph so Luna can inspect distinct embedding regions and local AST structure.
+The host agent may give Luna the region plan and visualization graph so Luna can inspect structural or embedding regions and local AST context.
 
 Luna's output is navigation and classification guidance for the host agent, not an authoritative source classification.
 
@@ -143,4 +162,4 @@ Any future Jev adapter requires an explicitly verified request and response cont
 
 An absent contract or credential is an actionable prerequisite, not a reason to invent a fallback endpoint.
 
-The command only performs embedding, graph enrichment, and region-plan generation.
+The command performs structural region planning or embedding graph enrichment and never performs final Jev classification.

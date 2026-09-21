@@ -82,8 +82,8 @@ class UnionFind:
 def parse_args(argv):
     parser = argparse.ArgumentParser(
         description=(
-            "Embed graphify-out/graph.json fingerprints with a local or "
-            "OpenAI-compatible backend and write a semantic visualization graph."
+            "Plan structural AST regions or embed graphify-out/graph.json "
+            "fingerprints with an OpenAI-compatible backend."
         )
     )
     parser.add_argument(
@@ -109,9 +109,9 @@ def parse_args(argv):
     )
     parser.add_argument(
         "--backend",
-        choices=("openai", "local"),
+        choices=("openai", "local", "structural"),
         default="openai",
-        help="Embedding backend (default: openai).",
+        help="Embedding or region backend (default: openai).",
     )
     parser.add_argument(
         "--endpoint",
@@ -585,6 +585,26 @@ def semantic_relationships(records, vectors, threshold, top_k):
             cluster_ids[member] = cluster_id
     return cluster_ids, edges
 
+
+def structural_regions(records, graph_edges):
+    node_indices = {record.node_id: index for index, record in enumerate(records)}
+    union_find = UnionFind(len(records))
+    for _edge, source, target, relation in graph_edges:
+        if relation != SEMANTIC_EDGE_TYPE:
+            union_find.union(node_indices[source], node_indices[target])
+
+    groups = {}
+    for index, record in enumerate(records):
+        groups.setdefault(union_find.find(index), []).append(record.node_id)
+    region_ids = {}
+    for members in groups.values():
+        members.sort()
+        digest_input = "\0".join(members).encode("utf-8")
+        region_id = "structural-region-" + hashlib.sha256(digest_input).hexdigest()[:16]
+        for member in members:
+            region_ids[member] = region_id
+    return region_ids
+
 def region_node_snapshot(record):
     neighbors = sorted(
         record.neighbors,
@@ -602,8 +622,7 @@ def region_node_snapshot(record):
         "neighbors": neighbors,
     }
 
-
-def build_region_plan(records, graph_edges, cluster_ids):
+def build_region_plan(records, graph_edges, cluster_ids, strategy):
     by_id = {record.node_id: record for record in records}
     members_by_cluster = {}
     for record in records:
@@ -676,6 +695,7 @@ def build_region_plan(records, graph_edges, cluster_ids):
         links.append(link)
     return {
         "schema": "graphify-region-plan/v1",
+        "strategy": strategy,
         "clusters": clusters,
         "cross_region_links": links,
     }
@@ -688,12 +708,13 @@ def default_region_plan_path(output_path):
     return str(destination) + ".regions.json"
 
 
-def enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key):
+def enrich_graph(
+    graph, records, cluster_ids, semantic_edges, edge_key, cluster_field
+):
     output = copy.deepcopy(graph)
     raw_nodes = output["nodes"]
-    cluster_field = "semantic_cluster_id"
     if any(cluster_field in record.node for record in records):
-        cluster_field = "graphify_semantic_cluster_id"
+        cluster_field = "graphify_" + cluster_field
     if isinstance(raw_nodes, list):
         for index, record in enumerate(records):
             raw_nodes[index][cluster_field] = cluster_ids[record.node_id]
@@ -738,13 +759,16 @@ def run(args):
 
     url = None
     api_key = ""
+    model = None
     if args.backend == "openai":
         endpoint = configured_provider_value(
             args.endpoint, DEFAULT_ENDPOINT_ENV, "endpoint"
         )
         url = embedding_url(endpoint)
         api_key = os.environ.get(args.api_key_env, "")
-    model = configured_provider_value(args.model, DEFAULT_MODEL_ENV, "model")
+        model = configured_provider_value(args.model, DEFAULT_MODEL_ENV, "model")
+    elif args.backend == "local":
+        model = configured_provider_value(args.model, DEFAULT_MODEL_ENV, "model")
 
     input_path = pathlib.Path(args.input)
     output_path = pathlib.Path(args.output)
@@ -772,24 +796,51 @@ def run(args):
     records = normalize_nodes(graph)
     edge_key, graph_edges = normalize_edges(graph)
     connected_edges = connected_graph_edges(records, graph_edges)
-    fingerprints = build_fingerprints(records, connected_edges)
-    if args.backend == "local":
-        vectors = request_local_embeddings(model, fingerprints, args.device)
+    region_edges = [
+        edge_info
+        for edge_info in connected_edges
+        if edge_info[3] != SEMANTIC_EDGE_TYPE
+    ]
+    fingerprints = build_fingerprints(records, region_edges)
+    if args.backend == "structural":
+        cluster_ids = structural_regions(records, region_edges)
+        semantic_edges = []
+        strategy = "structural_ast"
+        cluster_field = "structural_region_id"
     else:
-        vectors = request_embeddings(url, model, fingerprints, api_key, args.timeout)
-    cluster_ids, semantic_edges = semantic_relationships(
-        records, vectors, args.threshold, args.top_k
+        vectors = (
+            request_local_embeddings(model, fingerprints, args.device)
+            if args.backend == "local"
+            else request_embeddings(url, model, fingerprints, api_key, args.timeout)
+        )
+        cluster_ids, semantic_edges = semantic_relationships(
+            records, vectors, args.threshold, args.top_k
+        )
+        strategy = "embedding"
+        cluster_field = "semantic_cluster_id"
+    region_plan = build_region_plan(records, region_edges, cluster_ids, strategy)
+    output = enrich_graph(
+        graph, records, cluster_ids, semantic_edges, edge_key, cluster_field
     )
-    region_plan = build_region_plan(records, connected_edges, cluster_ids)
-    output = enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key)
     write_json(args.output, output, "output graph")
     write_json(region_plan_path, region_plan, "region plan")
-    print(
-        "graphify embedding complete: {} nodes, {} semantic edges, output {}, "
-        "region plan {}".format(
-            len(records), len(semantic_edges), args.output, region_plan_path
+    if args.backend == "structural":
+        print(
+            "graphify structural region plan complete: {} nodes, {} regions, "
+            "output {}, region plan {}".format(
+                len(records),
+                len(set(cluster_ids.values())),
+                args.output,
+                region_plan_path,
+            )
         )
-    )
+    else:
+        print(
+            "graphify embedding complete: {} nodes, {} semantic edges, output {}, "
+            "region plan {}".format(
+                len(records), len(semantic_edges), args.output, region_plan_path
+            )
+        )
 
 
 def main(argv=None):
