@@ -54,7 +54,9 @@ cat > "$INPUT" <<'JSON'
   ],
   "edges": [
     {"source": "user", "target": "account", "type": "declares"},
-    {"source": "account", "target": "invoice", "type": "references"}
+    {"source": "account", "target": "invoice", "type": "references"},
+    {"source": "claude_mods_firstmate_calm_hooks_register", "target": "user", "type": "references"},
+    {"source": "account", "target": "ref_claude_code", "type": "references"}
   ],
   "metadata": {"authoritative": true}
 }
@@ -249,6 +251,20 @@ assert all(edge["relation"] == "semantically_similar_to" for edge in semantic)
 assert all(edge["similarity"] >= 0.8 for edge in semantic)
 assert all(sum(edge["source"] == node_id for edge in semantic) <= 1 for node_id in ("user", "account", "invoice"))
 assert any(edge == {"source": "user", "target": "account", "type": "declares"} for edge in graph["edges"])
+assert any(
+    edge
+    == {
+        "source": "claude_mods_firstmate_calm_hooks_register",
+        "target": "user",
+        "type": "references",
+    }
+    for edge in graph["edges"]
+)
+assert any(
+    edge
+    == {"source": "account", "target": "ref_claude_code", "type": "references"}
+    for edge in graph["edges"]
+)
 cluster_ids = {node["semantic_cluster_id"] for node in graph["nodes"]}
 assert len(cluster_ids) == 2, cluster_ids
 assert graph["nodes"][0]["semantic_cluster_id"] == graph["nodes"][1]["semantic_cluster_id"]

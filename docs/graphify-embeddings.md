@@ -85,7 +85,9 @@ It recognizes common edge endpoint fields including `source`/`target`, `from`/`t
 
 It recognizes `relation`, `type`, `kind`, `label`, and `edge_type` as relation fields.
 
-Unknown endpoint references and malformed graph structures stop the command safely.
+Edges with unknown endpoint ids are preserved in the output but omitted from fingerprints, local neighbors, and region summaries.
+
+Other malformed graph structures stop the command safely.
 
 Cosine similarity is computed locally from the returned vectors.
 

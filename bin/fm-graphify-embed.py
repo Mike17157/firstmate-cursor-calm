@@ -305,6 +305,15 @@ def normalize_edges(graph):
     return key, edges
 
 
+def connected_graph_edges(records, graph_edges):
+    node_ids = {record.node_id for record in records}
+    return [
+        edge_info
+        for edge_info in graph_edges
+        if edge_info[1] in node_ids and edge_info[2] in node_ids
+    ]
+
+
 def build_fingerprints(records, graph_edges):
     by_id = {record.node_id: record for record in records}
     for record in records:
@@ -762,7 +771,8 @@ def run(args):
 
     records = normalize_nodes(graph)
     edge_key, graph_edges = normalize_edges(graph)
-    fingerprints = build_fingerprints(records, graph_edges)
+    connected_edges = connected_graph_edges(records, graph_edges)
+    fingerprints = build_fingerprints(records, connected_edges)
     if args.backend == "local":
         vectors = request_local_embeddings(model, fingerprints, args.device)
     else:
@@ -770,7 +780,7 @@ def run(args):
     cluster_ids, semantic_edges = semantic_relationships(
         records, vectors, args.threshold, args.top_k
     )
-    region_plan = build_region_plan(records, graph_edges, cluster_ids)
+    region_plan = build_region_plan(records, connected_edges, cluster_ids)
     output = enrich_graph(graph, records, cluster_ids, semantic_edges, edge_key)
     write_json(args.output, output, "output graph")
     write_json(region_plan_path, region_plan, "region plan")
