@@ -163,3 +163,35 @@ Any future Jev adapter requires an explicitly verified request and response cont
 An absent contract or credential is an actionable prerequisite, not a reason to invent a fallback endpoint.
 
 The command performs structural region planning or embedding graph enrichment and never performs final Jev classification.
+
+## Persistent navigation viewer
+
+`bin/fm-graphify-viewer.py` serves a local Svelte and Sigma viewer backed by the Graphify graph and optional structural and call artifacts.
+
+Build the bundled frontend once before starting the server.
+
+```sh
+(cd web && npm install && npm run build)
+bin/fm-graphify-viewer.py \
+  --graph graphify-out/graph.json \
+  --structural graphify-out/graph-semantic.regions.json \
+  --calls graphify-out/calls.json \
+  --source-root . \
+  --host 127.0.0.1 \
+  --port 8765
+```
+
+The server exposes `/api/subgraph?level=region`, `/api/subgraph?level=file`, and `/api/subgraph?level=function` with bounded nodes and aggregated call edges.
+
+The region level shows regions and cross-region calls, the file level shows files or modules and aggregated calls, and the function level shows call arrows with relation labels.
+Node roles are classified once by the server as test, leaf, function or method, file or module, or structural region, and the viewer keeps those role colors across levels with a neutral selected-state ring.
+
+The viewer changes levels as the Sigma camera zoom crosses its region, file, and function thresholds, supports wheel navigation and search, and loads bounded source snippets from `/api/source`.
+
+The viewer polls `/api/health` and reloads derived data after the graph, structural artifact, or call artifact modification time changes.
+
+A Graphify export hook can regenerate those artifacts in place while the server remains running, and the next health poll refreshes the viewer without restarting it.
+
+`--max-visible` bounds every API response and the rendered graph, while `--frontend` selects a separately built Svelte asset directory when packaging the server.
+
+The server keeps the Graphify input authoritative and never writes any graph or source artifact.
