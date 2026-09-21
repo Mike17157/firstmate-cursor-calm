@@ -49,7 +49,7 @@ python3 "$TOOL" \
   --graph "$GRAPH" \
   --source-root "$SOURCE_ROOT" \
   --port 0 \
-  --max-visible 3 \
+  --max-visible 20 \
   > "$LOG" 2>&1 &
 SERVER_PID=$!
 
@@ -99,7 +99,7 @@ assert len(region["nodes"]) == 2 and region["truncated"]
 assert {node["role"] for node in region["nodes"]} == {"structural_region"}
 assert region["edges"]
 
-status, _, body = get("/api/subgraph?level=file&limit=10")
+status, _, body = get("/api/subgraph?level=file&limit=3")
 files = json.loads(body)
 assert status == 200 and files["level"] == "file"
 assert {node["role"] for node in files["nodes"]} == {"file_module"}
@@ -111,6 +111,24 @@ functions = json.loads(body)
 assert {node["role"] for node in functions["nodes"]} == {"function"}
 assert status == 200 and functions["level"] == "function"
 assert functions["edges"][0]["label"] == "calls"
+
+status, _, body = get("/api/scene?limit=20")
+scene = json.loads(body)
+assert status == 200 and scene["schema"] == "graphify-scene/v1"
+assert {node["level"] for node in scene["nodes"]} == {"region", "file", "function"}
+assert len(scene["nodes"]) == 11 and not scene["truncated"]
+by_id = {node["id"]: node for node in scene["nodes"]}
+assert by_id["file:src/a.py"]["parent_id"] == "region-a"
+assert by_id["function:alpha"]["parent_id"] == "file:src/a.py"
+assert {node["cluster_id"] for node in scene["nodes"] if node["level"] == "function"} == {
+    "region-a",
+    "region-b",
+    "region-c",
+}
+assert {edge["kind"] for edge in scene["edges"]} == {"call", "contains"}
+status, _, body = get("/api/scene?limit=8")
+bounded_scene = json.loads(body)
+assert status == 200 and len(bounded_scene["nodes"]) == 8 and bounded_scene["truncated"]
 
 status, _, body = get("/api/search?q=beta&limit=10")
 search = json.loads(body)

@@ -181,14 +181,12 @@ bin/fm-graphify-viewer.py \
   --port 8765
 ```
 
-The server exposes `/api/subgraph?level=region`, `/api/subgraph?level=file`, and `/api/subgraph?level=function` with bounded nodes and aggregated call edges.
-
-The region level shows regions and cross-region calls, the file level shows files or modules and aggregated calls, and the function level shows call arrows with relation labels.
+The server exposes `/api/scene` as one bounded multilevel scene containing region, file or module, and function nodes with stable parent and cluster IDs plus aggregated call and containment edges.
+The compatibility `/api/subgraph?level=region`, `/api/subgraph?level=file`, and `/api/subgraph?level=function` endpoints remain available for focused API consumers.
 Node roles are classified once by the server as test, leaf, function or method, file or module, or structural region, and the viewer keeps those role colors across levels with a neutral selected-state ring.
-
-The viewer changes levels as the Sigma camera zoom crosses its region, file, and function thresholds, supports wheel navigation and search, and loads bounded source snippets from `/api/source`.
-
-The viewer polls `/api/health` and reloads derived data after the graph, structural artifact, or call artifact modification time changes.
+The viewer uses a deterministic ForceAtlas2 layout once, then Sigma reducers use the continuous camera ratio to reveal cluster, file, and function labels and edges without fetching or rebuilding the graph on zoom.
+The viewer supports wheel navigation, search, source inspection, and bounded rendering.
+The viewer polls `/api/health` and rebuilds the persistent scene after the graph, structural artifact, or call artifact modification time changes.
 
 A Graphify export hook can regenerate those artifacts in place while the server remains running, and the next health poll refreshes the viewer without restarting it.
 

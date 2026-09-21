@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import Graph from "graphology";
+  import forceAtlas2 from "graphology-layout-forceatlas2";
   import Sigma from "sigma";
 
   let canvas;
@@ -19,10 +20,13 @@
   let focusedNode = "";
   let selectedRole = "";
   let healthTimer;
-  let loadTimer;
-  const LAYOUT_ITERATIONS = 48;
-  let layoutPositions = new Map();
-  let layoutAnchors = new Map();
+  let sceneNodeIds = [];
+  let sceneEdgeIds = [];
+  let sceneLoads = 0;
+  let cameraUpdates = 0;
+  let currentRatio = 1;
+  let sceneNodeCount = 0;
+  let sceneEdgeCount = 0;
 
   const ROLE_COLORS = {
     test: "#f472b6",
@@ -38,9 +42,8 @@
     file_module: "file / module",
     structural_region: "structural region",
   };
-
   const levelLabel = {
-    region: "regions",
+    region: "clusters",
     file: "files / modules",
     function: "functions",
   };
@@ -78,165 +81,117 @@
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
   }
 
-  function averagePoint(points) {
-    if (!points.length) return { x: 0, y: 0 };
-    const sum = points.reduce(
-      (total, point) => ({ x: total.x + point.x, y: total.y + point.y }),
+  function visibleAtLevel(level) {
+    return level === activeLevel;
+  }
+
+  function labelVisible(attrs, ratio, selected) {
+    if (selected) return true;
+    if (attrs.level === "region") return ratio >= 1.35;
+    if (attrs.level === "file") return ratio < 1.12;
+    return ratio < 0.7;
+  }
+  function edgeVisible(attrs) {
+    return attrs.kind === "call" && attrs.level === activeLevel;
+  }
+
+  function updateDebug() {
+    if (typeof window === "undefined") return;
+    window.__graphifyViewerDebug = {
+      sceneLoads,
+      cameraUpdates,
+      generation,
+      activeLevel,
+      ratio: currentRatio,
+      nodeCount: graph ? graph.order : 0,
+      camera: sigma ? sigma.getCamera().getState() : null,
+    };
+  }
+
+  function layoutScene(nodes, edges) {
+    for (const node of nodes.slice().sort((left, right) => left.id.localeCompare(right.id))) {
+      const point = stablePoint(node.id);
+      const size = node.level === "region" ? 10 : node.level === "file" ? 7 : 5;
+      graph.addNode(node.id, {
+        label: node.label,
+        x: point.x,
+        y: point.y,
+        size,
+        color: colorForRole(node.role),
+        borderColor: colorForRole(node.role),
+        role: node.role,
+        roleLabel: ROLE_LABELS[node.role] || node.role,
+        level: node.level,
+        parentId: node.parent_id,
+        clusterId: node.cluster_id,
+        node_ids: node.node_ids,
+        source_paths: node.source_paths,
+        member_count: node.member_count,
+      });
+    }
+    for (const edge of edges.slice().sort((left, right) => left.id.localeCompare(right.id))) {
+      if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
+      graph.addDirectedEdgeWithKey(edge.id, edge.source, edge.target, {
+        type: "arrow",
+        kind: edge.kind,
+        level: edge.level,
+        relation: edge.relation,
+        label: edge.count > 1 ? `${edge.label} ×${edge.count}` : edge.label,
+        size: edge.kind === "contains" ? 0.4 : Math.min(4, 0.7 + Math.log2(edge.count + 1)),
+        color: edge.kind === "contains" ? "#1e293b" : "#64748b",
+      });
+    }
+    forceAtlas2.assign(graph, {
+      iterations: 200,
+      settings: {
+        barnesHutOptimize: graph.order > 80,
+        gravity: 1,
+        scalingRatio: 8,
+        slowDown: 5,
+      },
+    });
+    const points = graph.nodes().map((id) => graph.getNodeAttributes(id));
+    const center = points.reduce(
+      (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
       { x: 0, y: 0 }
     );
-    return { x: sum.x / points.length, y: sum.y / points.length };
+    center.x /= points.length || 1;
+    center.y /= points.length || 1;
+    const extent = Math.max(
+      0.0001,
+      ...points.map((point) => Math.max(Math.abs(point.x - center.x), Math.abs(point.y - center.y)))
+    );
+    for (const id of graph.nodes()) {
+      graph.updateNodeAttributes(id, (attrs) => ({
+        ...attrs,
+        x: (attrs.x - center.x) * (0.8 / extent),
+        y: (attrs.y - center.y) * (0.8 / extent),
+      }));
+    }
   }
 
-  function layoutGraph(nodes, edges) {
-    const positions = new Map();
-    const velocities = new Map();
-    const nodeIds = nodes.map((node) => node.id).sort();
-    for (const node of nodes) {
-      const memberIds = (node.node_ids || [node.id]).slice().sort();
-      const inherited = memberIds.map((id) => layoutAnchors.get(id)).filter(Boolean);
-      const previous = layoutPositions.get(node.id);
-      const seed = previous || averagePoint(inherited.length ? inherited : memberIds.map(stablePoint));
-      positions.set(node.id, { x: seed.x, y: seed.y });
-      velocities.set(node.id, { x: 0, y: 0 });
-    }
-
-    const validEdges = edges
-      .filter((edge) => positions.has(edge.source) && positions.has(edge.target) && edge.source !== edge.target)
-      .slice()
-      .sort((left, right) => {
-        const leftKey = `${left.source}:${left.target}`;
-        const rightKey = `${right.source}:${right.target}`;
-        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-      });
-    for (let iteration = 0; iteration < LAYOUT_ITERATIONS; iteration += 1) {
-      const forces = new Map(nodeIds.map((id) => [id, { x: 0, y: 0 }]));
-      for (let leftIndex = 0; leftIndex < nodeIds.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1; rightIndex < nodeIds.length; rightIndex += 1) {
-          const left = nodeIds[leftIndex];
-          const right = nodeIds[rightIndex];
-          const leftPoint = positions.get(left);
-          const rightPoint = positions.get(right);
-          let dx = rightPoint.x - leftPoint.x;
-          let dy = rightPoint.y - leftPoint.y;
-          let distance = Math.hypot(dx, dy);
-          if (distance < 0.0001) {
-            const angle = stableHash(`${left}:${right}:collision`) * Math.PI * 2;
-            dx = Math.cos(angle) * 0.0001;
-            dy = Math.sin(angle) * 0.0001;
-            distance = 0.0001;
-          }
-          const repulsion = Math.min(0.08, 0.006 / (distance * distance));
-          const forceX = (dx / distance) * repulsion;
-          const forceY = (dy / distance) * repulsion;
-          forces.get(left).x -= forceX;
-          forces.get(left).y -= forceY;
-          forces.get(right).x += forceX;
-          forces.get(right).y += forceY;
-        }
-      }
-      for (const edge of validEdges) {
-        const source = positions.get(edge.source);
-        const target = positions.get(edge.target);
-        const dx = target.x - source.x;
-        const dy = target.y - source.y;
-        const distance = Math.max(0.0001, Math.hypot(dx, dy));
-        const spring = (distance - 0.24) * 0.08;
-        forces.get(edge.source).x += (dx / distance) * spring;
-        forces.get(edge.source).y += (dy / distance) * spring;
-        forces.get(edge.target).x -= (dx / distance) * spring;
-        forces.get(edge.target).y -= (dy / distance) * spring;
-      }
-      for (const id of nodeIds) {
-        const velocity = velocities.get(id);
-        const force = forces.get(id);
-        velocity.x = (velocity.x + force.x) * 0.82;
-        velocity.y = (velocity.y + force.y) * 0.82;
-        const point = positions.get(id);
-        point.x = Math.max(-1, Math.min(1, point.x + velocity.x));
-        point.y = Math.max(-1, Math.min(1, point.y + velocity.y));
-      }
-    }
-    const center = averagePoint([...positions.values()]);
-    for (const point of positions.values()) {
-      point.x -= center.x;
-      point.y -= center.y;
-    }
-
-
-    let extent = 0;
-    for (const point of positions.values()) {
-      extent = Math.max(extent, Math.abs(point.x), Math.abs(point.y));
-    }
-    const scale = extent > 0.88 ? 0.88 / extent : 1;
-    for (const node of nodes) {
-      const point = positions.get(node.id);
-      point.x *= scale;
-      point.y *= scale;
-      layoutPositions.set(node.id, { ...point });
-      for (const memberId of node.node_ids || [node.id]) {
-        layoutAnchors.set(memberId, { ...point });
-      }
-    }
-    return positions;
-  }
-
-  function scheduleLoad(level, center = focus) {
-    clearTimeout(loadTimer);
-    loadTimer = setTimeout(() => loadGraph(level, center), 140);
-  }
-
-  async function loadGraph(level = activeLevel, center = focus) {
+  async function loadScene(preserveCamera = true) {
     if (!sigma) return;
-    const params = new URLSearchParams({ level, limit: String(maxVisible) });
-    if (center) params.set("center", center);
     try {
-      const response = await fetch(`/api/subgraph?${params}`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "graph request failed");
       const camera = sigma.getCamera().getState();
-      const previousLevel = activeLevel;
-      activeLevel = payload.level;
+      const response = await fetch(`/api/scene?limit=${maxVisible}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "scene request failed");
       generation = payload.graph_generation;
       truncated = payload.truncated;
+      sceneNodeCount = payload.nodes.length;
+      sceneEdgeCount = payload.edges.length;
+      currentRatio = camera.ratio;
+      activeLevel = levelForRatio(currentRatio);
       graph.clear();
-      const positions = layoutGraph(payload.nodes, payload.edges);
-      payload.nodes.forEach((node) => {
-        const point = positions.get(node.id);
-        const role = node.role || (activeLevel === "region" ? "structural_region" : activeLevel === "file" ? "file_module" : "function");
-        graph.addNode(node.id, {
-          label: node.label,
-          x: point.x,
-          y: point.y,
-          size: activeLevel === "region" ? 10 : activeLevel === "file" ? 7 : 5,
-          color: colorForRole(role),
-          borderColor: colorForRole(role),
-          role,
-          roleLabel: ROLE_LABELS[role] || role,
-          node_ids: node.node_ids,
-          source_paths: node.source_paths,
-          member_count: node.member_count,
-        });
-      });
-      if (center) {
-        const selected = payload.nodes.find(
-          (node) => node.id === center || (node.node_ids || []).includes(center)
-        );
-        focusedNode = selected ? selected.id : center;
-        selectedRole = selected ? selected.role : selectedRole;
-      }
-      payload.edges.forEach((edge, index) => {
-        if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) return;
-        graph.addDirectedEdgeWithKey(`edge-${index}-${edge.source}-${edge.target}`, edge.source, edge.target, {
-          type: "arrow",
-          label: activeLevel === "function" ? `${edge.label}${edge.count > 1 ? ` ×${edge.count}` : ""}` : "",
-          size: Math.min(4, 0.7 + Math.log2(edge.count + 1)),
-          color: activeLevel === "function" ? "#64748b" : "#334155",
-        });
-      });
+      layoutScene(payload.nodes, payload.edges);
+      sceneNodeIds = graph.nodes();
+      sceneEdgeIds = graph.edges();
+      sceneLoads += 1;
       sigma.refresh();
-      const nextCamera = previousLevel === activeLevel ? camera : { ...camera, x: 0, y: 0 };
-      sigma.getCamera().setState(nextCamera);
-      status = `${levelLabel[activeLevel]} · ${payload.nodes.length} nodes · ${payload.edges.length} calls${truncated ? " · capped" : ""}`;
+      sigma.getCamera().setState(preserveCamera ? camera : { x: 0.5, y: 0.5, ratio: currentRatio });
+      status = `${levelLabel[activeLevel]} · ${sceneNodeCount} scene nodes · ${sceneEdgeCount} edges${truncated ? " · capped" : ""}`;
+      updateDebug();
     } catch (error) {
       status = `Graph error: ${error.message}`;
     }
@@ -247,29 +202,31 @@
       const response = await fetch("/api/health");
       const health = await response.json();
       if (!response.ok) throw new Error(health.error || "health request failed");
-      if (generation && health.generation !== generation) {
-        await loadGraph(activeLevel, focus);
-      }
+      if (generation && health.generation !== generation) await loadScene(true);
     } catch (error) {
       status = `Reload check failed: ${error.message}`;
     }
   }
 
   function handleCamera() {
-    const ratio = sigma.getCamera().getState().ratio;
-    zoomValue = valueForRatio(ratio);
-    const nextLevel = levelForRatio(ratio);
-    if (nextLevel !== activeLevel) scheduleLoad(nextLevel);
+    if (!sigma) return;
+    currentRatio = sigma.getCamera().getState().ratio;
+    zoomValue = valueForRatio(currentRatio);
+    activeLevel = levelForRatio(currentRatio);
+    sigma.refresh({ partialGraph: { nodes: sceneNodeIds, edges: sceneEdgeIds } });
+    cameraUpdates += 1;
+    status = `${levelLabel[activeLevel]} · ${sceneNodeCount} scene nodes · ${sceneEdgeCount} edges${truncated ? " · capped" : ""}`;
+    updateDebug();
   }
 
   function setZoom(event) {
     const ratio = ratioForValue(Number(event.currentTarget.value));
     const state = sigma.getCamera().getState();
     sigma.getCamera().setState({ ...state, ratio });
-    handleCamera();
   }
 
   async function inspect(nodeId) {
+    if (!graph || !graph.hasNode(nodeId)) return;
     focus = nodeId;
     focusedNode = nodeId;
     const attrs = graph.getNodeAttributes(nodeId);
@@ -308,51 +265,54 @@
   }
 
   async function focusResult(result) {
-    focus = result.id;
-    focusedNode = result.id;
-    selectedRole = result.role || "";
-    sigma.refresh();
-    loadGraph(activeLevel, focus);
-    if (!result.source_path) return;
-    try {
-      const response = await fetch(`/api/source?path=${encodeURIComponent(result.source_path)}`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "source request failed");
-      source = `${payload.path}${payload.truncated ? " (truncated)" : ""}\n\n${payload.content}`;
-    } catch (error) {
-      source = `Source error: ${error.message}`;
-    }
+    const candidateIds = [result.id, `function:${result.id}`, `file:${result.id}`];
+    const nodeId = candidateIds.find((candidate) => graph.hasNode(candidate));
+    if (!nodeId) return;
+    focus = nodeId;
+    focusedNode = nodeId;
+    selectedRole = graph.getNodeAttribute(nodeId, "role");
+    const attrs = graph.getNodeAttributes(nodeId);
+    sigma.getCamera().animate({ x: attrs.x, y: attrs.y, ratio: Math.min(currentRatio, 0.55) }, { duration: 350 });
+    await inspect(nodeId);
   }
+
   onMount(() => {
     graph = new Graph({ type: "directed", multi: true });
     sigma = new Sigma(graph, canvas, {
       renderEdgeLabels: true,
       defaultNodeColor: "#22d3ee",
-      defaultEdgeColor: "#334155",
+      labelColor: { color: "#e2e8f0" },
       labelDensity: 0.08,
       labelGridCellSize: 80,
       zIndex: true,
       nodeReducer: (node, attrs) => {
         const selected = node === focusedNode;
+        const visible = visibleAtLevel(attrs.level);
+        const showLabel = visible && labelVisible(attrs, currentRatio, selected);
         return {
           ...attrs,
+          hidden: !visible,
           color: attrs.color,
           size: selected ? attrs.size + 3 : attrs.size,
           highlighted: selected,
           borderColor: selected ? "#f8fafc" : attrs.borderColor,
           borderSize: selected ? 3 : 1,
-          label: selected ? `[selected] ${attrs.label}` : attrs.label,
-          forceLabel: selected,
+          label: showLabel ? (selected ? `[selected] ${attrs.label}` : attrs.label) : "",
+          forceLabel: selected || showLabel,
         };
       },
+      edgeReducer: (_edge, attrs) => ({
+        ...attrs,
+        hidden: !edgeVisible(attrs),
+        label: edgeVisible(attrs) && currentRatio < 0.5 ? attrs.label : "",
+      }),
     });
-    sigma.on("clickNode", ({ node }) => inspect(node));
     sigma.getCamera().on("updated", handleCamera);
-    loadGraph();
+    loadScene(false);
     healthTimer = setInterval(loadHealth, 2000);
+    updateDebug();
     return () => {
       clearInterval(healthTimer);
-      clearTimeout(loadTimer);
       sigma.kill();
     };
   });
@@ -387,7 +347,7 @@
         <span><i class="leaf"></i>leaf node</span>
         <span><i class="function"></i>function / method</span>
         <span><i class="file"></i>file / module</span>
-        <span><i class="region"></i>structural region</span>
+        <span><i class="region"></i>topology cluster</span>
         <span class="selection-marker"><i></i>[selected] neutral ring</span>
         <span>Wheel to zoom · click a node to inspect</span>
       </div>

@@ -440,9 +440,126 @@ class GraphSnapshot:
         if not incident_edges:
             return "leaf"
         return "file_module"
+    def _assign_entity_roles(self, level, entities):
+        incident_edges = defaultdict(int)
+        for edge in (*self.edges, *self.calls):
+            source = self._entity_for_node(level, edge["source"], entities)
+            target = self._entity_for_node(level, edge["target"], entities)
+            incident_edges[source] += 1
+            incident_edges[target] += 1
+        for entity_id, entity in entities.items():
+            entity["role"] = self._entity_role(
+                level, entity, incident_edges[entity_id]
+            )
+
+    def _scene_call_edges(self, level, entities):
+        grouped = defaultdict(int)
+        relations = defaultdict(set)
+        for edge in self.calls:
+            source = self._entity_for_node(level, edge["source"], entities)
+            target = self._entity_for_node(level, edge["target"], entities)
+            if source == target:
+                continue
+            key = (source, target)
+            grouped[key] += 1
+            relations[key].add(edge["relation"])
+        output = []
+        for source, target in sorted(grouped):
+            relation_values = sorted(relations[(source, target)])
+            relation = relation_values[0] if len(relation_values) == 1 else "calls"
+            output.append(
+                {
+                    "id": "call:{}:{}:{}".format(level, source, target),
+                    "source": source,
+                    "target": target,
+                    "level": level,
+                    "kind": "call",
+                    "relation": relation,
+                    "label": relation,
+                    "count": grouped[(source, target)],
+                }
+            )
+        return output
+
+    def scene(self, limit):
+        level_entities = {
+            level: self._entities(level)
+            for level in ("region", "file", "function")
+        }
+        for level, entities in level_entities.items():
+            self._assign_entity_roles(level, entities)
+
+        all_nodes = []
+        for level in ("region", "file", "function"):
+            entities = level_entities[level]
+            for entity_id in sorted(entities):
+                entity = entities[entity_id]
+                if level == "region":
+                    parent_id = None
+                    cluster_id = entity_id
+                elif level == "file":
+                    member = self.nodes[entity["node_ids"][0]]
+                    parent_id = member["region"]
+                    cluster_id = parent_id
+                else:
+                    member = self.nodes[entity["node_ids"][0]]
+                    parent_id = "file:" + (
+                        member["module"] or member["source_path"] or entity["node_ids"][0]
+                    )
+                    cluster_id = member["region"]
+                all_nodes.append(
+                    {
+                        "id": entity_id,
+                        "label": entity["label"],
+                        "level": level,
+                        "role": entity["role"],
+                        "parent_id": parent_id,
+                        "cluster_id": cluster_id,
+                        "source_paths": entity["source_paths"],
+                        "node_ids": entity["node_ids"],
+                        "member_count": entity["member_count"],
+                    }
+                )
+
+        selected_nodes = all_nodes[:limit]
+        selected_ids = {node["id"] for node in selected_nodes}
+        edges = []
+        for level in ("region", "file", "function"):
+            edges.extend(self._scene_call_edges(level, level_entities[level]))
+        for node in all_nodes:
+            if node["parent_id"]:
+                edges.append(
+                    {
+                        "id": "contains:{}:{}".format(node["parent_id"], node["id"]),
+                        "source": node["parent_id"],
+                        "target": node["id"],
+                        "level": node["level"],
+                        "kind": "contains",
+                        "relation": "contains",
+                        "label": "",
+                        "count": 1,
+                    }
+                )
+        selected_edges = [
+            edge
+            for edge in sorted(edges, key=lambda edge: edge["id"])
+            if edge["source"] in selected_ids and edge["target"] in selected_ids
+        ][:limit]
+        return {
+            "schema": "graphify-scene/v1",
+            "nodes": selected_nodes,
+            "edges": selected_edges,
+            "truncated": len(selected_nodes) < len(all_nodes),
+            "total_nodes": len(all_nodes),
+            "total_edges": len(edges),
+            "max_visible": limit,
+            "graph_generation": self.generation,
+        }
+
 
     def subgraph(self, level, center, limit):
         entities = self._entities(level)
+        self._assign_entity_roles(level, entities)
         entity_edges = defaultdict(int)
         edge_relations = defaultdict(set)
         for edge in self.calls:
@@ -453,21 +570,6 @@ class GraphSnapshot:
             key = (source, target)
             entity_edges[key] += 1
             edge_relations[key].add(edge["relation"])
-        incident_edges = defaultdict(int)
-        for edge in self.edges:
-            source = self._entity_for_node(level, edge["source"], entities)
-            target = self._entity_for_node(level, edge["target"], entities)
-            incident_edges[source] += 1
-            incident_edges[target] += 1
-        for edge in self.calls:
-            source = self._entity_for_node(level, edge["source"], entities)
-            target = self._entity_for_node(level, edge["target"], entities)
-            incident_edges[source] += 1
-            incident_edges[target] += 1
-        for entity_id, entity in entities.items():
-            entity["role"] = self._entity_role(
-                level, entity, incident_edges[entity_id]
-            )
 
 
         adjacency = defaultdict(set)
@@ -716,6 +818,8 @@ class Handler(BaseHTTPRequestHandler):
             snapshot = self.store.require_snapshot()
             if route == "/api/health":
                 return self._send_json(200, self.store.health())
+            if route == "/api/scene":
+                return self._send_json(200, snapshot.scene(self._limit(query)))
             if route in ("/api/graph", "/api/subgraph"):
                 level = query.get("level", [""])[0].lower()
                 if level in ("low", "overview"):
