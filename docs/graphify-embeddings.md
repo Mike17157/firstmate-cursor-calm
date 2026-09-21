@@ -181,9 +181,10 @@ bin/fm-graphify-viewer.py \
   --port 8765
 ```
 
-The server exposes `/api/scene` as one bounded multilevel scene containing topology-cluster, structural-region, file or module, and function nodes with stable parent and cluster IDs plus aggregated call and containment edges.
+The server exposes `/api/scene` as one bounded multilevel scene containing folder clusters, structural regions, file or module, and function nodes with stable parent and cluster IDs plus aggregated call and containment edges.
 The compatibility `/api/subgraph?level=region`, `/api/subgraph?level=file`, and `/api/subgraph?level=function` endpoints remain available for focused API consumers.
 Node roles are classified once by the server as test, leaf, function or method, file or module, structural region, or topology cluster, and the viewer keeps those role colors across levels with a neutral selected-state ring.
+Folder clusters use source paths when available and fall back to stable node namespaces, rather than selecting a fixed number of labels from the render cap.
 The viewer uses a deterministic ForceAtlas2 layout once, then Sigma reducers use the continuous camera ratio to reveal bounded cluster, region, file, and function labels and edges without fetching or rebuilding the graph on zoom.
 The viewer supports wheel navigation, search, source inspection, and bounded rendering.
 The viewer polls `/api/health` and rebuilds the persistent scene after the graph, structural artifact, or call artifact modification time changes.

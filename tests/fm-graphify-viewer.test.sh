@@ -24,14 +24,14 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-mkdir -p "$SOURCE_ROOT/src"
+mkdir -p "$SOURCE_ROOT/src" "$SOURCE_ROOT/lib" "$SOURCE_ROOT/docs"
 cat > "$GRAPH" <<'JSON'
 {
   "nodes": [
-    {"id": "alpha", "label": "Alpha", "source_path": "src/a.py", "region_id": "region-a"},
-    {"id": "beta", "label": "Beta", "source_path": "src/b.py", "region_id": "region-a"},
-    {"id": "gamma", "label": "Gamma", "source_path": "src/c.py", "region_id": "region-b"},
-    {"id": "delta", "label": "Delta", "source_path": "src/d.py", "region_id": "region-c"}
+    {"id": "alpha", "label": "Alpha", "source_file": "src/a.py", "region_id": "region-a"},
+    {"id": "beta", "label": "Beta", "source_file": "src/b.py", "region_id": "region-a"},
+    {"id": "gamma", "label": "Gamma", "source_file": "lib/c.py", "region_id": "region-b"},
+    {"id": "delta", "label": "Delta", "source_file": "docs/d.py", "region_id": "region-c"}
   ],
   "edges": [
     {"source": "alpha", "target": "beta", "type": "calls"},
@@ -42,8 +42,8 @@ cat > "$GRAPH" <<'JSON'
 JSON
 printf 'print("alpha")\n' > "$SOURCE_ROOT/src/a.py"
 printf 'print("beta")\n' > "$SOURCE_ROOT/src/b.py"
-printf 'print("gamma")\n' > "$SOURCE_ROOT/src/c.py"
-printf 'print("delta")\n' > "$SOURCE_ROOT/src/d.py"
+printf 'print("gamma")\n' > "$SOURCE_ROOT/lib/c.py"
+printf 'print("delta")\n' > "$SOURCE_ROOT/docs/d.py"
 
 python3 "$TOOL" \
   --graph "$GRAPH" \
@@ -103,7 +103,7 @@ status, _, body = get("/api/subgraph?level=file&limit=3")
 files = json.loads(body)
 assert status == 200 and files["level"] == "file"
 assert {node["role"] for node in files["nodes"]} == {"file_module"}
-assert {node["label"] for node in files["nodes"]} == {"src/a.py", "src/b.py", "src/c.py"}
+assert {node["label"] for node in files["nodes"]} == {"docs/d.py", "lib/c.py", "src/a.py"}
 assert files["edges"][0]["label"] == "calls"
 
 status, _, body = get("/api/subgraph?level=function&limit=10")
@@ -121,7 +121,7 @@ assert {node["level"] for node in scene["nodes"]} == {
     "file",
     "function",
 }
-assert len(scene["nodes"]) == 13 and not scene["truncated"]
+assert len(scene["nodes"]) == 14 and not scene["truncated"]
 by_id = {node["id"]: node for node in scene["nodes"]}
 assert by_id["file:src/a.py"]["parent_id"] in by_id
 assert by_id["file:src/a.py"]["parent_id"].startswith("region-")
@@ -137,7 +137,7 @@ assert all(
     if node["level"] == "function"
 )
 assert {edge["kind"] for edge in scene["edges"]} == {"call", "contains"}
-assert sum(node["level"] == "cluster" for node in scene["nodes"]) == 2
+assert sum(node["level"] == "cluster" for node in scene["nodes"]) == 3
 status, _, body = get("/api/scene?limit=8")
 bounded_scene = json.loads(body)
 assert status == 200 and len(bounded_scene["nodes"]) <= 8 and bounded_scene["truncated"]

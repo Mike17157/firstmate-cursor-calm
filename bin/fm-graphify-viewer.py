@@ -9,7 +9,6 @@ Only Python's standard library is required.
 
 import argparse
 import hashlib
-import math
 import importlib.util
 import json
 import mimetypes
@@ -204,6 +203,11 @@ def _node_module(helper, node):
         node,
         ("module", "module_id", "moduleId", "package", "namespace"),
     )
+def _node_source_path(helper, node):
+    return helper.node_source_path(node) or _first_field(
+        helper, node, ("source_file", "sourceFile")
+    )
+
 
 def _has_test_marker(values):
     for value in values:
@@ -306,7 +310,7 @@ def _parse_graph(helper, payload):
         nodes[record.node_id] = {
             "id": record.node_id,
             "label": helper.node_label(node, record.node_id),
-            "source_path": helper.node_source_path(node),
+            "source_path": _node_source_path(helper, node),
             "module": _node_module(helper, node),
             "kind": _first_field(helper, node, ("kind", "type", "category", "node_type")),
             "region": _node_region(helper, node),
@@ -488,53 +492,43 @@ class GraphSnapshot:
             )
         return output
 
+    def _region_cluster_key(self, entity):
+        folders = []
+        for path in entity["source_paths"]:
+            parts = [
+                part
+                for part in str(path).replace("\\", "/").strip("/").split("/")
+                if part not in ("", ".")
+            ]
+            if parts:
+                folders.append(parts[0] if len(parts) > 1 else "(root)")
+        if not folders:
+            for node_id in entity["node_ids"]:
+                token = str(node_id).split("_", 1)[0]
+                if token:
+                    folders.append(token)
+        return sorted(folders)[0] if folders else "(other)"
+
     def _region_clusters(self, regions):
-        region_ids = sorted(regions)
-        if not region_ids:
-            return {}, {}
-        target_count = min(24, max(1, math.ceil(math.sqrt(len(region_ids)))))
-        seeds = [
-            region_ids[min(len(region_ids) - 1, (index * len(region_ids)) // target_count)]
-            for index in range(target_count)
-        ]
-        seeds = list(dict.fromkeys(seeds))
-        adjacency = defaultdict(lambda: defaultdict(int))
-        for edge in self.calls:
-            source = self.nodes[edge["source"]]["region"]
-            target = self.nodes[edge["target"]]["region"]
-            if source != target:
-                adjacency[source][target] += 1
-                adjacency[target][source] += 1
-        members = {seed: [seed] for seed in seeds}
-        for region_id in region_ids:
-            if region_id in members:
-                continue
-            scores = {
-                seed: sum(adjacency[region_id].get(member, 0) for member in grouped)
-                for seed, grouped in members.items()
-            }
-            best_score = max(scores.values())
-            if best_score:
-                seed = min(seed for seed, score in scores.items() if score == best_score)
-            else:
-                digest = hashlib.sha256(region_id.encode("utf-8")).hexdigest()
-                seed = seeds[int(digest[:8], 16) % len(seeds)]
-            members[seed].append(region_id)
+        groups = defaultdict(list)
+        for region_id in sorted(regions):
+            groups[self._region_cluster_key(regions[region_id])].append(region_id)
         clusters = {}
         region_clusters = {}
-        for index, grouped in enumerate(
-            sorted((sorted(grouped) for grouped in members.values())), 1
-        ):
-            cluster_id = "cluster:" + hashlib.sha256(
-                "\0".join(grouped).encode("utf-8")
+        for folder in sorted(groups):
+            grouped = groups[folder]
+            cluster_id = "cluster:folder:" + hashlib.sha256(
+                folder.encode("utf-8")
             ).hexdigest()[:16]
+            label = "project root" if folder == "(root)" else folder + "/"
             clusters[cluster_id] = {
                 "id": cluster_id,
-                "label": "cluster-{:02d} · {} regions".format(index, len(grouped)),
+                "label": "{} · {} regions".format(label, len(grouped)),
                 "level": "cluster",
                 "role": "structural_cluster",
                 "parent_id": None,
                 "cluster_id": cluster_id,
+                "grouping": "folder",
                 "source_paths": sorted(
                     {
                         path
@@ -639,7 +633,7 @@ class GraphSnapshot:
             return selected
 
         cluster_nodes = [clusters[cluster_id] for cluster_id in sorted(clusters)]
-        cluster_budget = min(len(cluster_nodes), max(1, limit // 8))
+        cluster_budget = min(len(cluster_nodes), limit)
         selected_clusters = cluster_nodes[:cluster_budget]
         selected_cluster_ids = {node["id"] for node in selected_clusters}
         region_budget = min(
