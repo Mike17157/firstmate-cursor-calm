@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 type FastToolUse = {
   tool_use_id: string;
   tool: string;
@@ -30,6 +34,27 @@ type FastDecision = {
   action: "keep" | "drop_result" | "drop_call";
 };
 
+type FastQuestion = {
+  type: "noul";
+  instructions: string;
+};
+
+type FastAnswer = {
+  noul: number;
+  type?: "noul";
+};
+
+type FastResponse = {
+  answers: Record<string, FastAnswer>;
+};
+
+type FastAsker = {
+  ask(
+    state: unknown,
+    questions: Record<string, FastQuestion>,
+  ): Promise<FastResponse>;
+};
+
 type FastResult = {
   messages: FastMessage[];
   decisions: FastDecision[];
@@ -43,6 +68,11 @@ type FastResult = {
 type FastJev = {
   compactMessages(
     messages: readonly FastMessage[],
+    options?: Record<string, unknown>,
+  ): Promise<FastResult>;
+  compact(
+    messages: readonly FastMessage[],
+    asker: FastAsker,
     options?: Record<string, unknown>,
   ): Promise<FastResult>;
   collectToolCalls(messages: readonly FastMessage[], preserveRecentMessages: number): FastCall[];
@@ -70,6 +100,8 @@ type FetchInit = {
 
 type FetchLike = (url: string, init?: FetchInit) => Promise<FetchResponse>;
 
+type JevProvider = "typesafe" | "openrouter";
+
 type JevPreparation = {
   firstKeptEntryId: string;
   messagesToSummarize: readonly unknown[];
@@ -82,6 +114,9 @@ type JevCompactionOptions = {
   signal?: AbortSignal;
   fetch?: FetchLike;
   goal?: string;
+  provider?: JevProvider;
+  model?: string;
+  apiKey?: string;
   minReductionRatio?: number;
   preserveRecentMessages?: number;
   maxStateTokens?: number;
@@ -104,6 +139,16 @@ type JevCompaction = {
 };
 
 const FAST_JEV_PACKAGE = ["fast-jev-compaction"].join("");
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_OPENROUTER_MODEL = "typesafe/jev-1.13";
+const DEFAULT_TYPESAFE_MODEL = "jev-latest";
+const OPENROUTER_SYSTEM_PROMPT = [
+  "You are Jev, a deterministic context-compaction decision service.",
+  "The user message contains a whole coding-assistant conversation state and noul questions.",
+  "Answer every question with a probability from 0 through 1 that its item must stay.",
+  "Return only one JSON object with this exact shape: {\"answers\":{\"question_key\":{\"type\":\"noul\",\"noul\":0.0}}}.",
+  "Use every question key exactly once, do not add prose or Markdown, and do not rewrite the conversation.",
+].join(" ");
 const DEFAULT_MIN_REDUCTION_RATIO = 0.25;
 const DEFAULT_PRESERVE_RECENT_MESSAGES = 6;
 const DEFAULT_MAX_STATE_TOKENS = 25_000;
@@ -116,6 +161,7 @@ const PRIVATE_KEY = /-----BEGIN[\s\S]+?PRIVATE KEY-----[\s\S]+?-----END[\s\S]+?P
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const URL_CREDENTIALS = /(https?:\/\/[^\s/:@]+:)[^\s@]+@/gi;
 const ASSIGNMENT_SECRET = /\b(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|authorization|credential|private[_-]?key|client[_-]?secret)\b\s*["']?\s*[:=]\s*["']?[^\s"'`,;}\])]+/gi;
+const SENSITIVE_KEY = /(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|authorization|credential|private[_-]?key|client[_-]?secret)/iu;
 const KNOWN_TOKEN = /\b(?:sk|pk|ghp|gho|github_pat|xox[baprs])-[A-Za-z0-9_-]{8,}\b/gi;
 
 function redactText(text: string): string {
@@ -134,7 +180,9 @@ function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
   seen.add(value);
   if (Array.isArray(value)) return value.map((item) => redactValue(item, seen));
   const copy: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) copy[key] = redactValue(item, seen);
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = SENSITIVE_KEY.test(key) ? REDACTED : redactValue(item, seen);
+  }
   return copy;
 }
 
@@ -237,6 +285,136 @@ function serializeMessages(messages: readonly FastMessage[]): string {
   return sections.join("\n\n");
 }
 
+function extensionRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
+function configDirectory(): string {
+  const home = process.env.FM_HOME || process.env.FM_ROOT_OVERRIDE || extensionRoot();
+  return process.env.FM_CONFIG_OVERRIDE || resolve(home, "config");
+}
+
+function readSetting(name: string): string | undefined {
+  try {
+    const contents = readFileSync(resolve(configDirectory(), name), "utf8");
+    for (const raw of contents.split(/\r?\n/u)) {
+      const line = raw.replace(/#.*$/u, "").trim();
+      if (line) return line;
+    }
+  } catch {
+    // Missing local config uses the environment fallback.
+  }
+  return undefined;
+}
+
+function configuredValue(file: string, environment: string): string | undefined {
+  return readSetting(file) || process.env[environment]?.trim() || undefined;
+}
+
+function parseProvider(value: string | undefined): JevProvider | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "typesafe" || normalized === "typesafe-direct") return "typesafe";
+  if (normalized === "openrouter") return "openrouter";
+  return undefined;
+}
+
+function resolveProvider(options: JevCompactionOptions): JevProvider | undefined {
+  const configured = options.provider
+    ? parseProvider(options.provider)
+    : parseProvider(configuredValue("jev-provider", "FM_JEV_PROVIDER"));
+  if (configured) return configured;
+  if (options.provider || readSetting("jev-provider") || process.env.FM_JEV_PROVIDER) return undefined;
+  return process.env.OPENROUTER_API_KEY || readSetting("openrouter-api-key")
+    ? "openrouter"
+    : "typesafe";
+}
+
+function resolveModel(provider: JevProvider, options: JevCompactionOptions): string {
+  return options.model?.trim() ||
+    configuredValue("jev-model", "FM_JEV_MODEL") ||
+    (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : DEFAULT_TYPESAFE_MODEL);
+}
+
+function resolveApiKey(provider: JevProvider, options: JevCompactionOptions): string {
+  return options.apiKey?.trim() ||
+    readSetting("jev-api-key") ||
+    readSetting(provider === "openrouter" ? "openrouter-api-key" : "typesafe-api-key") ||
+    process.env[provider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY"]?.trim() ||
+    "";
+}
+
+function parseJsonResponse(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  const unfenced = trimmed.startsWith("```")
+    ? trimmed.replace(/^```(?:json)?\s*/iu, "").replace(/\s*```$/u, "")
+    : trimmed;
+  const parsed: unknown = JSON.parse(unfenced);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("OpenRouter returned a non-object response");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function openRouterContent(value: unknown): string {
+  const choices = record(value).choices;
+  const choice = Array.isArray(choices) ? record(choices[0]) : {};
+  const message = record(choice.message);
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content.map((part) => {
+    if (typeof part === "string") return part;
+    return typeof record(part).text === "string" ? record(part).text as string : "";
+  }).join("");
+}
+
+class OpenRouterJevAsker implements FastAsker {
+  private readonly apiKey: string;
+  private readonly model: string;
+  private readonly fetcher: FetchLike;
+
+  constructor(apiKey: string, model: string, fetcher: FetchLike) {
+    this.apiKey = apiKey;
+    this.model = model;
+    this.fetcher = fetcher;
+  }
+
+  async ask(state: unknown, questions: Record<string, FastQuestion>): Promise<FastResponse> {
+    const response = await this.fetcher(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: OPENROUTER_SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify({ state, questions }) },
+        ],
+      }),
+    });
+    const responseText = await response.text();
+    if (!response.ok) throw new Error(`OpenRouter request failed (${response.status})`);
+    const parsed = parseJsonResponse(openRouterContent(JSON.parse(responseText)));
+    const answers = record(parsed.answers);
+    for (const key of Object.keys(questions)) {
+      const answer = record(answers[key]);
+      if (
+        answer.type !== undefined && answer.type !== "noul" ||
+        typeof answer.noul !== "number" ||
+        !Number.isFinite(answer.noul) ||
+        answer.noul < 0 ||
+        answer.noul > 1
+      ) {
+        throw new Error(`Invalid OpenRouter Jev answer for ${key}`);
+      }
+    }
+    return { answers: answers as Record<string, FastAnswer> };
+  }
+}
+
 // Pi loads this tracked extension without installing its optional package; a
 // runtime import lets missing dependencies take the same native fallback path.
 async function loadFastJev(): Promise<FastJev> {
@@ -260,7 +438,9 @@ export async function compactPreparation(
   preparation: JevPreparation,
   options: JevCompactionOptions = {},
 ): Promise<JevCompaction | undefined> {
-  if (!process.env.TYPESAFE_API_KEY || options.signal?.aborted) return undefined;
+  const provider = resolveProvider(options);
+  const apiKey = provider ? resolveApiKey(provider, options) : "";
+  if (!provider || !apiKey || options.signal?.aborted) return undefined;
 
   const source = [
     ...(preparation.previousSummary ? [textMessage(preparation.previousSummary)] : []),
@@ -281,19 +461,31 @@ export async function compactPreparation(
   const minReductionRatio = numberOption(options.minReductionRatio, DEFAULT_MIN_REDUCTION_RATIO);
   const redacted = toFastMessages(source, true);
   const fetchFn = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
+  const model = resolveModel(provider, options);
+  const compactOptions = {
+    goal: options.goal ? redactText(options.goal) : undefined,
+    keepThreshold,
+    preserveRecentMessages,
+    maxStateTokens,
+    maxRequestTokens,
+    truncateHeadChars,
+  };
 
   try {
     options.signal?.throwIfAborted();
     const fastJev = await loadFastJev();
-    const scored = await fastJev.compactMessages(redacted, {
-      goal: options.goal ? redactText(options.goal) : undefined,
-      keepThreshold,
-      preserveRecentMessages,
-      maxStateTokens,
-      maxRequestTokens,
-      truncateHeadChars,
-      fetch: withAbort(fetchFn, options.signal),
-    });
+    const scored = provider === "openrouter"
+      ? await fastJev.compact(
+        redacted,
+        new OpenRouterJevAsker(apiKey, model, withAbort(fetchFn, options.signal)),
+        compactOptions,
+      )
+      : await fastJev.compactMessages(redacted, {
+        ...compactOptions,
+        apiKey,
+        model,
+        fetch: withAbort(fetchFn, options.signal),
+      });
     options.signal?.throwIfAborted();
 
     const calls = fastJev.collectToolCalls(original, preserveRecentMessages);

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Live Jev compaction verification for the Pi extension adapter.
 #
-# This intentionally requires TYPESAFE_API_KEY and reaches the real TypeSafe
-# endpoint. It proves redaction, request bounds, verbatim user and assistant
-# text, tool-only reduction, and native-fallback behavior without replacing the
-# Jev transport with a fake.
+# This intentionally requires OPENROUTER_API_KEY and reaches the real OpenRouter
+# chat-completion endpoint with the TypeSafe Jev model. It proves redaction,
+# request bounds, verbatim user and assistant text, tool-only reduction, and
+# native-fallback behavior without replacing the Jev transport with a fake.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v node >/dev/null 2>&1 || fail "node is required for live Jev compaction verification"
-[ -n "${TYPESAFE_API_KEY:-}" ] || fail "TYPESAFE_API_KEY is required for live Jev compaction verification"
+[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY is required for live Jev compaction verification"
 
 TMP_ROOT=$(fm_test_tmproot fm-pi-jev-compaction-live)
 fixture="$TMP_ROOT/fixture"
-mkdir -p "$fixture/lib" "$fixture/node_modules"
+mkdir -p "$fixture/lib" "$fixture/node_modules" "$fixture/config"
 cp "$ROOT/.pi/extensions/lib/fm-jev-compaction.ts" "$fixture/lib/fm-jev-compaction.ts"
 cp "$ROOT/.pi/extensions/package.json" "$fixture/package.json"
 [ -d "$ROOT/.pi/extensions/node_modules/fast-jev-compaction" ] || {
@@ -26,6 +26,9 @@ ln -s "$ROOT/.pi/extensions/node_modules/fast-jev-compaction" "$fixture/node_mod
   fail "could not link fast-jev-compaction package"
 }
 
+export FM_CONFIG_OVERRIDE="$fixture/config"
+export FM_JEV_PROVIDER=openrouter
+export FM_JEV_MODEL=typesafe/jev-1.13
 cd "$fixture" || fail "could not enter the live Jev fixture"
 node --experimental-strip-types --input-type=module <<'JS'
 import { compactPreparation } from "./lib/fm-jev-compaction.ts";
@@ -61,12 +64,16 @@ const result = await compactPreparation(
   },
   { fetch: fetchSpy, keepThreshold: 0.9, preserveRecentMessages: 0, maxStateTokens: 25000, maxRequestTokens: 30000 },
 );
-if (!result) throw new Error("real Jev returned no usable reduction");
+if (!result) throw new Error("real OpenRouter Jev returned no usable reduction");
 if (requests.length !== result.details.requests) throw new Error("Jev request count was not recorded");
 for (const request of requests) {
-  if (request.url !== "https://api.typesafe.ai/v1/systemone") throw new Error("unexpected Jev endpoint");
+  if (request.url !== "https://openrouter.ai/api/v1/chat/completions") throw new Error("unexpected Jev endpoint");
   const body = JSON.parse(request.init.body);
-  if (JSON.stringify(body).includes(secret)) throw new Error("secret reached the real Jev request");
+  if (body.model !== "typesafe/jev-1.13") throw new Error("configured Jev model was not used");
+  const prompt = JSON.parse(body.messages[1].content);
+  const serialized = JSON.stringify(prompt);
+  if (serialized.includes(secret)) throw new Error("secret reached the real Jev request");
+  if (serialized.length > 180000) throw new Error("Jev request exceeded its safety bound");
 }
 if (!result.summary.includes(exactUser) || !result.summary.includes(exactAssistant)) {
   throw new Error("user or assistant text was not preserved verbatim");
@@ -74,20 +81,20 @@ if (!result.summary.includes(exactUser) || !result.summary.includes(exactAssista
 if (result.details.method !== "fast-jev-compaction") throw new Error("unexpected compaction method");
 if (result.details.reductionRatio < 0.25) throw new Error("Jev reduction was below the safety threshold");
 if (result.details.requests < 1 || result.details.stateTokens < 1) throw new Error("Jev request state was not recorded");
-const savedKey = process.env.TYPESAFE_API_KEY;
-delete process.env.TYPESAFE_API_KEY;
+const savedKey = process.env.OPENROUTER_API_KEY;
+delete process.env.OPENROUTER_API_KEY;
 const missingKey = await compactPreparation(
   { firstKeptEntryId: "missing-key", tokensBefore: 1, messagesToSummarize: messages, turnPrefixMessages: [] },
 );
 if (missingKey !== undefined) throw new Error("missing credentials did not use native fallback");
-process.env.TYPESAFE_API_KEY = savedKey;
+process.env.OPENROUTER_API_KEY = savedKey;
 const aborted = new AbortController();
 aborted.abort();
 const abortedResult = await compactPreparation(
   { firstKeptEntryId: "aborted", tokensBefore: 1, messagesToSummarize: messages, turnPrefixMessages: [] },
-  { signal: aborted.signal },
+  { provider: "openrouter", apiKey: "unused-after-abort", signal: aborted.signal },
 );
 if (abortedResult !== undefined) throw new Error("aborted Jev request did not use native fallback");
-console.log(`live Jev compaction passed: ${result.details.requests} request(s), state ~${result.details.stateTokens} tokens`);
+console.log(`live OpenRouter Jev compaction passed: ${result.details.requests} request(s), state ~${result.details.stateTokens} tokens`);
 JS
-pass "Pi Jev compaction uses the real TypeSafe transport and preserves text while reducing tool data"
+pass "Pi Jev compaction uses the real OpenRouter TypeSafe Jev transport and preserves text while reducing tool data"
