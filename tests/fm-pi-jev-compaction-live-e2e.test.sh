@@ -7,6 +7,11 @@
 # native-fallback behavior without replacing the Jev transport with a fake.
 set -u
 
+if [ "${FM_JEV_LIVE_E2E:-0}" != 1 ]; then
+  echo "skip: set FM_JEV_LIVE_E2E=1 with OPENROUTER_API_KEY to run the live Jev compaction regression"
+  exit 0
+fi
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
