@@ -67,10 +67,10 @@ Codex's interactive TUI fired no project `SessionStart` hook at all in the same 
 Codex's run tier is therefore verified only for `codex exec` startup and context-preserving resume.
 The interactive TUI is a known uncovered gap: Firstmate has no tracked session-open, compaction, or re-emit channel there, ships no global hook, and does not claim instruction-refresh delivery for that surface.
 
-Pi compaction was verified on 2026-08-05 with Pi 0.82.0 in the same throwaway lab after setting `.pi/settings.json` `compaction.keepRecentTokens` to 200 and completing one substantial assistant-prose turn before issuing `/compact`.
-Pi reported `Compacted from 7,697 tokens`, the recorder observed `session_compact`, and the model quoted the freshly injected `source=compact` token back.
-Both preconditions are load-bearing: the stock 20,000-token keep window exceeds a small lab session, and `AgentSession.compact()` aborts an in-flight turn before measuring compactable history, which otherwise discards that turn and reports `Nothing to compact (session too small)`.
-Tool output alone does not grow compactable context; the completed assistant prose does.
+Pi Jev compaction is wired through `.pi/extensions/lib/fm-jev-compaction.ts` and the `session_before_compact` hook.
+The adapter uses the `fast-jev-compaction` package and TypeSafe transport, redacts the Jev state, preserves user and assistant text verbatim, bounds the state and request estimates, and falls back to Pi's native summary on missing credentials or any unusable Jev result.
+The live guard is `TYPESAFE_API_KEY=... tests/fm-pi-jev-compaction-live-e2e.test.sh`; it requires the credential and dependency and fails rather than silently skipping when either is absent.
+Run the guard with the installed Pi and `fast-jev-compaction` versions to record version-scoped request, reduction, and fallback evidence here; this change claims no credentialed live result.
 
 Observed compaction output and recorder source:
 

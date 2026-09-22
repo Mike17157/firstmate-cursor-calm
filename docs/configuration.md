@@ -34,6 +34,16 @@ The `/calm` command replaces the file atomically before changing live presentati
 The extension reloads this preference on every Pi `session_start`, including startup, new, resume, fork, and reload reasons.
 This preference is local to each Firstmate home and is not part of secondmate inherited configuration.
 
+## Pi Jev compaction
+
+The tracked Pi primary extension uses the `fast-jev-compaction` package during `session_before_compact` when `TYPESAFE_API_KEY` is set.
+Install its runtime dependency once from the tracked code root with `npm install --prefix .pi/extensions`.
+Jev sees a redacted, whole-history state bounded to 25,000 estimated state tokens and 30,000 estimated request tokens.
+User and assistant text stays verbatim in the resulting compaction context, while Jev may remove tool calls or truncate their results.
+Missing credentials, an unavailable dependency, an aborted request, a transport or response error, an unfittable history, or a reduction below 25% delegates to Pi's native compaction.
+The extension never logs the request or its contents, and redaction runs before transcript data or custom compaction instructions reach Jev.
+The `TYPESAFE_API_KEY` lookup remains process-environment-only; no key is stored in Firstmate configuration.
+
 ## Pi supervision branch
 
 On a Pi primary, a persistent in-process supervision branch handles eligible task-local wake rows and selected heartbeat reviews while keeping main-only rows on the captain-facing path; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns row eligibility, mixed-queue dispatch, heartbeat routing, and the pre-drain recheck.
