@@ -1,0 +1,8 @@
+{
+  "name": "firstmate-pi-extensions",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fast-jev-compaction": "^0.4.0"
+  }
+}

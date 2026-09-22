@@ -34,6 +34,19 @@ The `/calm` command replaces the file atomically before changing live presentati
 The extension reloads this preference on every Pi `session_start`, including startup, new, resume, fork, and reload reasons.
 This preference is local to each Firstmate home and is not part of secondmate inherited configuration.
 
+## Pi Jev compaction
+
+The tracked Pi primary extension uses the `fast-jev-compaction` package during `session_before_compact`.
+The provider is `openrouter` when `config/jev-provider` or `FM_JEV_PROVIDER` selects it, and otherwise follows the available OpenRouter or TypeSafe credential.
+The OpenRouter default model is `typesafe/jev-1.13`, and the TypeSafe-direct default model is `jev-latest`.
+Set `config/jev-provider` and `config/jev-model` to make the provider and model explicit, with `FM_JEV_PROVIDER` and `FM_JEV_MODEL` as per-process fallbacks.
+The OpenRouter credential is read from `config/jev-api-key` first, then `config/openrouter-api-key`, then `OPENROUTER_API_KEY`, while the TypeSafe-direct path uses the corresponding TypeSafe names.
+Install its runtime dependency once from the tracked code root with `npm install --prefix .pi/extensions`.
+Jev sees a redacted, whole-history state bounded to 25,000 estimated state tokens and 30,000 estimated request tokens.
+User and assistant text stays verbatim in the resulting compaction context, while Jev may remove tool calls or truncate their results.
+Missing credentials, an unavailable dependency, an aborted request, a transport or response error, an unfittable history, or a reduction below 25% delegates to Pi's native compaction.
+The extension never logs the request or its contents, and redaction runs before transcript data or custom compaction instructions reach Jev.
+
 ## Pi supervision branch
 
 On a Pi primary, a persistent in-process supervision branch handles eligible task-local wake rows and selected heartbeat reviews while keeping main-only rows on the captain-facing path; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns row eligibility, mixed-queue dispatch, heartbeat routing, and the pre-drain recheck.

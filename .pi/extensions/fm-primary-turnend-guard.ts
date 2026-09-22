@@ -8,6 +8,7 @@ import {
   classifyFirstmateCurrentOperationalText,
   encodeFirstmateOperationalInput,
 } from "./lib/fm-operational-input.ts";
+import { compactPreparation } from "./lib/fm-jev-compaction.ts";
 
 let guardFollowupActive = false;
 
@@ -533,6 +534,14 @@ export default function (pi: ExtensionAPI) {
     if (!generation) return;
     const message = await claimSessionstartMessage(generation, ctx);
     return message ? { message } : undefined;
+  });
+
+  pi.on?.("session_before_compact", async (event) => {
+    const compaction = await compactPreparation(event.preparation, {
+      signal: event.signal,
+      goal: event.customInstructions,
+    });
+    return compaction ? { compaction } : undefined;
   });
 
   // Pi's compaction equivalent. Manual compaction is idle and auto-compaction
