@@ -1,0 +1,8 @@
+PASS no-credentials-native-fallback: compactPreparation returned undefined as expected
+PASS aborted-signal-native-fallback: compactPreparation returned undefined as expected
+PASS auto-detect-routes-to-openrouter: routed to OpenRouter (1 request(s)), reductionRatio=0.97
+PASS auto-detect-routes-to-typesafe: routed to TypeSafe-direct (1 request(s)), reductionRatio=0.97
+PASS explicit-config-override-forces-typesafe: config/jev-provider=typesafe overrode auto-detect as expected
+PASS dual-credentials-present-routes-to-openrouter: with both credentials present, runtime routed to: https://openrouter.ai/api/v1/chat/completions
+not ok - OPENROUTER_API_KEY is required for live Jev compaction verification
+exit=1
